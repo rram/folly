@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -360,10 +360,4 @@ TEST(StringGen, Batch) {
   EXPECT_EQ(4, from(chunks) | resplit('\n') | batch(3) | rconcat | count);
   EXPECT_EQ(lines, from(chunks) | resplit('\n') | eachTo<std::string>() |
                        batch(3) | rconcat | as<vector>());
-}
-
-int main(int argc, char *argv[]) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
 }

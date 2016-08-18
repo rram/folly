@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,16 +19,17 @@
 #include <stdlib.h>
 #include <thread>
 #include <vector>
+
+#include <gtest/gtest.h>
 #include <boost/optional.hpp>
+#include <boost/thread/shared_mutex.hpp>
+
 #include <folly/Benchmark.h>
 #include <folly/MPMCQueue.h>
-#include <folly/Random.h>
-#include <folly/test/DeterministicSchedule.h>
-#include <gflags/gflags.h>
-#include <gtest/gtest.h>
-
-#include <boost/thread/shared_mutex.hpp>
 #include <folly/RWSpinLock.h>
+#include <folly/Random.h>
+#include <folly/portability/GFlags.h>
+#include <folly/test/DeterministicSchedule.h>
 
 using namespace folly;
 using namespace folly::test;
@@ -40,11 +41,6 @@ typedef SharedMutexImpl<true, void, DeterministicAtomic, true>
     DSharedMutexReadPriority;
 typedef SharedMutexImpl<false, void, DeterministicAtomic, true>
     DSharedMutexWritePriority;
-
-COMMON_CONCURRENCY_SHARED_MUTEX_DECLARE_STATIC_STORAGE(
-    DSharedMutexReadPriority);
-COMMON_CONCURRENCY_SHARED_MUTEX_DECLARE_STATIC_STORAGE(
-    DSharedMutexWritePriority);
 
 template <typename Lock>
 void runBasicTest() {
@@ -92,19 +88,39 @@ void runBasicHoldersTest() {
   SharedMutexToken token;
 
   {
+    // create an exclusive write lock via holder
     typename Lock::WriteHolder holder(lock);
     EXPECT_FALSE(lock.try_lock());
     EXPECT_FALSE(lock.try_lock_shared(token));
 
+    // move ownership to another write holder via move constructor
     typename Lock::WriteHolder holder2(std::move(holder));
+    EXPECT_FALSE(lock.try_lock());
+    EXPECT_FALSE(lock.try_lock_shared(token));
+
+    // move ownership to another write holder via assign operator
     typename Lock::WriteHolder holder3;
     holder3 = std::move(holder2);
+    EXPECT_FALSE(lock.try_lock());
+    EXPECT_FALSE(lock.try_lock_shared(token));
 
+    // downgrade from exclusive to upgrade lock via move constructor
     typename Lock::UpgradeHolder holder4(std::move(holder3));
-    typename Lock::WriteHolder holder5(std::move(holder4));
 
+    // ensure we can lock from a shared source
+    EXPECT_FALSE(lock.try_lock());
+    EXPECT_TRUE(lock.try_lock_shared(token));
+    lock.unlock_shared(token);
+
+    // promote from upgrade to exclusive lock via move constructor
+    typename Lock::WriteHolder holder5(std::move(holder4));
+    EXPECT_FALSE(lock.try_lock());
+    EXPECT_FALSE(lock.try_lock_shared(token));
+
+    // downgrade exclusive to shared lock via move constructor
     typename Lock::ReadHolder holder6(std::move(holder5));
 
+    // ensure we can lock from another shared source
     EXPECT_FALSE(lock.try_lock());
     EXPECT_TRUE(lock.try_lock_shared(token));
     lock.unlock_shared(token);
@@ -478,9 +494,11 @@ static void runContendedReaders(size_t numOps,
                                 size_t numThreads,
                                 bool useSeparateLocks) {
   char padding1[64];
+  (void)padding1;
   Lock globalLock;
   int valueProtectedByLock = 10;
   char padding2[64];
+  (void)padding2;
   Atom<bool> go(false);
   Atom<bool>* goPtr = &go; // workaround for clang bug
   vector<thread> threads(numThreads);
@@ -513,56 +531,56 @@ static void runContendedReaders(size_t numOps,
   }
 }
 
-static void folly_rwspin_reads(uint numOps,
+static void folly_rwspin_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, RWSpinLock, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_wr_pri_reads(uint numOps,
+static void shmtx_wr_pri_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexWritePriority, TokenLocker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_w_bare_reads(uint numOps,
+static void shmtx_w_bare_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexWritePriority, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_rd_pri_reads(uint numOps,
+static void shmtx_rd_pri_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexReadPriority, TokenLocker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void shmtx_r_bare_reads(uint numOps,
+static void shmtx_r_bare_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, SharedMutexReadPriority, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void folly_ticket_reads(uint numOps,
+static void folly_ticket_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, RWTicketSpinLock64, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void boost_shared_reads(uint numOps,
+static void boost_shared_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, boost::shared_mutex, Locker>(
       numOps, numThreads, useSeparateLocks);
 }
 
-static void pthrd_rwlock_reads(uint numOps,
+static void pthrd_rwlock_reads(uint32_t numOps,
                                size_t numThreads,
                                bool useSeparateLocks) {
   runContendedReaders<atomic, PosixRWLock, Locker>(
@@ -575,9 +593,11 @@ static void runMixed(size_t numOps,
                      double writeFraction,
                      bool useSeparateLocks) {
   char padding1[64];
+  (void)padding1;
   Lock globalLock;
   int valueProtectedByLock = 0;
   char padding2[64];
+  (void)padding2;
   Atom<bool> go(false);
   Atom<bool>* goPtr = &go; // workaround for clang bug
   vector<thread> threads(numThreads);
@@ -598,7 +618,6 @@ static void runMixed(size_t numOps,
           long randVal;
           lrand48_r(&buffer, &randVal);
           bool writeOp = randVal < writeThreshold;
-          SharedMutexToken token;
           if (writeOp) {
             locker.lock(lock);
             if (!useSeparateLocks) {
@@ -630,7 +649,7 @@ static void folly_rwspin(size_t numOps,
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_wr_pri(uint numOps,
+static void shmtx_wr_pri(uint32_t numOps,
                          size_t numThreads,
                          double writeFraction,
                          bool useSeparateLocks) {
@@ -638,7 +657,7 @@ static void shmtx_wr_pri(uint numOps,
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_w_bare(uint numOps,
+static void shmtx_w_bare(uint32_t numOps,
                          size_t numThreads,
                          double writeFraction,
                          bool useSeparateLocks) {
@@ -646,7 +665,7 @@ static void shmtx_w_bare(uint numOps,
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_rd_pri(uint numOps,
+static void shmtx_rd_pri(uint32_t numOps,
                          size_t numThreads,
                          double writeFraction,
                          bool useSeparateLocks) {
@@ -654,7 +673,7 @@ static void shmtx_rd_pri(uint numOps,
       numOps, numThreads, writeFraction, useSeparateLocks);
 }
 
-static void shmtx_r_bare(uint numOps,
+static void shmtx_r_bare(uint32_t numOps,
                          size_t numThreads,
                          double writeFraction,
                          bool useSeparateLocks) {
@@ -998,14 +1017,14 @@ TEST(SharedMutex, deterministic_mixed_mostly_read_write_prio) {
 TEST(SharedMutex, mixed_mostly_read_read_prio) {
   for (int pass = 0; pass < 5; ++pass) {
     runMixed<atomic, SharedMutexReadPriority, TokenLocker>(
-        50000, 32, 0.1, false);
+        10000, 32, 0.1, false);
   }
 }
 
 TEST(SharedMutex, mixed_mostly_read_write_prio) {
   for (int pass = 0; pass < 5; ++pass) {
     runMixed<atomic, SharedMutexWritePriority, TokenLocker>(
-        50000, 32, 0.1, false);
+        10000, 32, 0.1, false);
   }
 }
 
@@ -1227,8 +1246,10 @@ static void burn(size_t n) {
 template <typename Lock, template <typename> class Atom = atomic>
 static void runPingPong(size_t numRounds, size_t burnCount) {
   char padding1[56];
+  (void)padding1;
   pair<Lock, char[56]> locks[3];
   char padding2[56];
+  (void)padding2;
 
   Atom<int> avail(0);
   auto availPtr = &avail; // workaround for clang crash
@@ -1350,8 +1371,8 @@ BENCHMARK(single_thread_lock_unlock, iters) {
   }
 }
 
-#define BENCH_BASE(args...) BENCHMARK_NAMED_PARAM(args)
-#define BENCH_REL(args...) BENCHMARK_RELATIVE_NAMED_PARAM(args)
+#define BENCH_BASE(...) FB_VA_GLUE(BENCHMARK_NAMED_PARAM, (__VA_ARGS__))
+#define BENCH_REL(...) FB_VA_GLUE(BENCHMARK_RELATIVE_NAMED_PARAM, (__VA_ARGS__))
 
 // 100% reads.  Best-case scenario for deferred locks.  Lock is colocated
 // with read data, so inline lock takes cache miss every time but deferred
@@ -1703,7 +1724,7 @@ BENCH_REL (boost_shared_ping_pong, burn1M, 1000, 1000000)
 BENCH_REL (pthrd_rwlock_ping_pong, burn1M, 1000, 1000000)
 
 // Reproduce with 10 minutes and
-//   sudo nice -n -20 \
+//   sudo nice -n -20
 //     shared_mutex_test --benchmark --bm_min_iters=1000000
 //
 // Comparison use folly::RWSpinLock as the baseline, with the

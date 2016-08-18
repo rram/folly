@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,7 +41,8 @@ template class detail::HistogramBuckets<int64_t, Histogram<int64_t>::Bucket>;
 template class MultiLevelTimeSeries<int64_t>;
 template class TimeseriesHistogram<int64_t>;
 
-// Histogram::getPercentileBucketIdx() and Histogram::getPercentileEstimate()
+// Histogram::getPercentileBucketIdx(), Histogram::getPercentileEstimate()
+// and Histogram::computeTotalCount()
 // are implemented using template methods.  Instantiate the default versions of
 // these methods too, so anyone using them won't also need to explicitly
 // include Histogram-defs.h
@@ -58,5 +59,8 @@ template int64_t detail::HistogramBuckets<int64_t, Histogram<int64_t>::Bucket>
     double pct,
     Histogram<int64_t>::CountFromBucket countFromBucket,
     Histogram<int64_t>::AvgFromBucket avgFromBucket) const;
+template uint64_t detail::HistogramBuckets<int64_t, Histogram<int64_t>::Bucket>
+  ::computeTotalCount<Histogram<int64_t>::CountFromBucket>(
+    Histogram<int64_t>::CountFromBucket countFromBucket) const;
 
 } // folly

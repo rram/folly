@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -122,9 +122,9 @@ void checkTWang(uint64_t r) {
 TEST(Hash, TWang_Unmix64) {
   // We'll try (1 << i), (1 << i) + 1, (1 << i) - 1
   for (int i = 1; i < 64; i++) {
-    checkTWang((1U << i) - 1);
-    checkTWang(1U << i);
-    checkTWang((1U << i) + 1);
+    checkTWang((uint64_t(1) << i) - 1);
+    checkTWang(uint64_t(1) << i);
+    checkTWang((uint64_t(1) << i) + 1);
   }
 }
 
@@ -303,7 +303,7 @@ TEST(Hash, std_tuple_different_hash) {
             std::hash<tuple3>()(t3));
 }
 
-TEST(Range, Hash) {
+TEST(Hash, Strings) {
   using namespace folly;
 
   StringPiece a1 = "10050517", b1 = "51107032",
@@ -329,4 +329,10 @@ TEST(Range, Hash) {
   EXPECT_NE(h2(w1), h2(w2));
   EXPECT_NE(h2(w1), h2(w3));
   EXPECT_NE(h2(w2), h2(w4));
+
+  // Check compatibility with std::string.
+  EXPECT_EQ(h2(a1), h2(a1.str()));
+  EXPECT_EQ(h2(a2), h2(a2.str()));
+  EXPECT_EQ(h2(a3), h2(a3.str()));
+  EXPECT_EQ(h2(a4), h2(a4.str()));
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_GEN_BASE_H
+#ifndef FOLLY_GEN_BASE_H_
 #error This file may only be included from folly/gen/Base.h
 #endif
 
@@ -347,7 +347,7 @@ class SeqWithStepImpl {
 template <class Value>
 class InfiniteImpl {
  public:
-  bool test(const Value& current) const { return true; }
+  bool test(const Value& /* current */) const { return true; }
   void step(Value& current) const { ++current; }
   static constexpr bool infinite = true;
 };
@@ -1830,10 +1830,11 @@ class IsEmpty : public Operator<IsEmpty<emptyResult>> {
                   "false or hang. 'any' or 'notEmpty' will either return true "
                   "or hang.");
     bool ans = emptyResult;
-    source | [&](Value v) -> bool {
-      ans = !emptyResult;
-      return false;
-    };
+    source |
+        [&](Value /* v */) -> bool {
+          ans = !emptyResult;
+          return false;
+        };
     return ans;
   }
 };
@@ -1890,9 +1891,8 @@ class Count : public Operator<Count> {
   size_t compose(const GenImpl<Value, Source>& source) const {
     static_assert(!Source::infinite, "Cannot count infinite source");
     return foldl(size_t(0),
-                 [](size_t accum, Value v) {
-                   return accum + 1;
-                 }).compose(source);
+                 [](size_t accum, Value /* v */) { return accum + 1; })
+        .compose(source);
   }
 };
 
@@ -2308,7 +2308,13 @@ constexpr detail::Indirect indirect{};
 
 constexpr detail::Unwrap unwrap{};
 
-inline detail::Take take(size_t count) { return detail::Take(count); }
+template <class Number>
+inline detail::Take take(Number count) {
+  if (count < 0) {
+    throw std::invalid_argument("Negative value passed to take()");
+  }
+  return detail::Take(static_cast<size_t>(count));
+}
 
 inline detail::Stride stride(size_t s) { return detail::Stride(s); }
 

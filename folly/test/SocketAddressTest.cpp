@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,12 +19,20 @@
 #include <gtest/gtest.h>
 #include <iostream>
 #include <sstream>
+#include <system_error>
+
+#include <folly/portability/Sockets.h>
+#include <folly/portability/Stdlib.h>
+#include <folly/test/SocketAddressTestHelper.h>
 
 using namespace boost;
 using std::string;
 using std::cerr;
 using std::endl;
 using folly::SocketAddress;
+using folly::SocketAddressTestHelper;
+
+namespace fsp = folly::portability::sockets;
 
 TEST(SocketAddress, Size) {
   SocketAddress addr;
@@ -138,9 +146,16 @@ TEST(SocketAddress, SetFromStrings) {
   EXPECT_EQ(addr.getPort(), 80);
 
   // Call setFromLocalIpPort() with an IP and port.
-  addr.setFromLocalIpPort("127.0.0.1:4321");
-  EXPECT_EQ(addr.getAddressStr(), "127.0.0.1");
-  EXPECT_EQ(addr.getPort(), 4321);
+  if (SocketAddressTestHelper::isIPv4Enabled()) {
+    addr.setFromLocalIpPort("127.0.0.1:4321");
+    EXPECT_EQ(addr.getAddressStr(), "127.0.0.1");
+    EXPECT_EQ(addr.getPort(), 4321);
+  }
+  if (SocketAddressTestHelper::isIPv6Enabled()) {
+    addr.setFromLocalIpPort("::1:4321");
+    EXPECT_EQ(addr.getAddressStr(), "::1");
+    EXPECT_EQ(addr.getPort(), 4321);
+  }
 
   // setFromIpPort() without an address should fail
   EXPECT_THROW(addr.setFromIpPort("4321"), std::invalid_argument);
@@ -652,7 +667,7 @@ void testSetFromSocket(const SocketAddress *serverBindAddr,
                        SocketAddress *serverPeerAddrRet,
                        SocketAddress *clientAddrRet,
                        SocketAddress *clientPeerAddrRet) {
-  int listenSock = socket(serverBindAddr->getFamily(), SOCK_STREAM, 0);
+  int listenSock = fsp::socket(serverBindAddr->getFamily(), SOCK_STREAM, 0);
   REQUIRE_ERRNO(listenSock > 0, "failed to create listen socket");
   sockaddr_storage laddr;
   serverBindAddr->getAddress(&laddr);
@@ -670,7 +685,7 @@ void testSetFromSocket(const SocketAddress *serverBindAddr,
 
   // Note that we use the family from serverBindAddr here, since we allow
   // clientBindAddr to be nullptr.
-  int clientSock = socket(serverBindAddr->getFamily(), SOCK_STREAM, 0);
+  int clientSock = fsp::socket(serverBindAddr->getFamily(), SOCK_STREAM, 0);
   REQUIRE_ERRNO(clientSock > 0, "failed to create client socket");
   if (clientBindAddr != nullptr) {
     sockaddr_storage clientAddr;

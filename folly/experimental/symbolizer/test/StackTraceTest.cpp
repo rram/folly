@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -67,7 +67,7 @@ void foo2() {
 }
 
 volatile bool handled = false;
-void handler(int num, siginfo_t* info, void* ctx) {
+void handler(int /* num */, siginfo_t* /* info */, void* /* ctx */) {
   // Yes, getStackTrace and VLOG aren't async-signal-safe, but signals
   // raised with raise() aren't "async" signals.
   foo1();

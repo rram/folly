@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 
 #include <gtest/gtest.h>
+
+#include <numeric>
 
 #include <boost/thread/barrier.hpp>
 
@@ -616,7 +618,6 @@ TEST(Collect, collectVariadicWithException) {
   Promise<int> pi;
   Future<bool> fb = pb.getFuture();
   Future<int> fi = pi.getFuture();
-  bool flag = false;
   auto f = collect(std::move(fb), std::move(fi));
   pb.setValue(true);
   EXPECT_FALSE(f.isReady());
@@ -630,4 +631,15 @@ TEST(Collect, collectAllNone) {
   std::vector<Future<int>> fs;
   auto f = collectAll(fs);
   EXPECT_TRUE(f.isReady());
+}
+
+TEST(Collect, noDefaultConstructor) {
+  struct A {
+    explicit A(size_t /* x */) {}
+  };
+
+  auto f1 = makeFuture(A(1));
+  auto f2 = makeFuture(A(2));
+
+  auto f = collect(std::move(f1), std::move(f2));
 }

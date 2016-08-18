@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +14,17 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_BASE_HASH_H_
-#define FOLLY_BASE_HASH_H_
+#pragma once
 
+#include <cstdint>
 #include <cstring>
-#include <stdint.h>
 #include <string>
-#include <utility>
 #include <tuple>
+#include <type_traits>
+#include <utility>
 
 #include <folly/ApplyTuple.h>
+#include <folly/Bits.h>
 #include <folly/SpookyHashV1.h>
 #include <folly/SpookyHashV2.h>
 
@@ -73,6 +74,8 @@ uint64_t hash_range(Iter begin,
   return hash;
 }
 
+inline uint32_t twang_32from64(uint64_t key);
+
 template <class Hasher, typename T, typename... Ts>
 size_t hash_combine_generic(const T& t, const Ts&... ts) {
   size_t seed = Hasher::hash(t);
@@ -80,7 +83,11 @@ size_t hash_combine_generic(const T& t, const Ts&... ts) {
     return seed;
   }
   size_t remainder = hash_combine_generic<Hasher>(ts...);
-  return hash_128_to_64(seed, remainder);
+  /* static */ if (sizeof(size_t) == sizeof(uint32_t)) {
+    return twang_32from64((uint64_t(seed) << 32) | remainder);
+  } else {
+    return static_cast<size_t>(hash_128_to_64(seed, remainder));
+  }
 }
 
 // Simply uses std::hash to hash.  Note that std::hash is not guaranteed
@@ -220,7 +227,8 @@ inline uint32_t fnv32(const char* s,
 inline uint32_t fnv32_buf(const void* buf,
                           size_t n,
                           uint32_t hash = FNV_32_HASH_START) {
-  const char* char_buf = reinterpret_cast<const char*>(buf);
+  // forcing signed char, since other platforms can use unsigned
+  const signed char* char_buf = reinterpret_cast<const signed char*>(buf);
 
   for (size_t i = 0; i < n; ++i) {
     hash += (hash << 1) + (hash << 4) + (hash << 7) +
@@ -249,7 +257,8 @@ inline uint64_t fnv64(const char* s,
 inline uint64_t fnv64_buf(const void* buf,
                           size_t n,
                           uint64_t hash = FNV_64_HASH_START) {
-  const char* char_buf = reinterpret_cast<const char*>(buf);
+  // forcing signed char, since other platforms can use unsigned
+  const signed char* char_buf = reinterpret_cast<const signed char*>(buf);
 
   for (size_t i = 0; i < n; ++i) {
     hash += (hash << 1) + (hash << 4) + (hash << 5) + (hash << 7) +
@@ -268,10 +277,11 @@ inline uint64_t fnv64(const std::string& str,
  * Paul Hsieh: http://www.azillionmonkeys.com/qed/hash.html
  */
 
-#define get16bits(d) (*((const uint16_t*) (d)))
+#define get16bits(d) folly::loadUnaligned<uint16_t>(d)
 
 inline uint32_t hsieh_hash32_buf(const void* buf, size_t len) {
-  const char* s = reinterpret_cast<const char*>(buf);
+  // forcing signed char, since other platforms can use unsigned
+  const unsigned char* s = reinterpret_cast<const unsigned char*>(buf);
   uint32_t hash = static_cast<uint32_t>(len);
   uint32_t tmp;
   size_t rem;
@@ -365,13 +375,20 @@ template<> struct hasher<uint32_t> {
 
 template<> struct hasher<int64_t> {
   size_t operator()(int64_t key) const {
-    return hash::twang_mix64(uint64_t(key));
+    return static_cast<size_t>(hash::twang_mix64(uint64_t(key)));
   }
 };
 
 template<> struct hasher<uint64_t> {
   size_t operator()(uint64_t key) const {
-    return hash::twang_mix64(key);
+    return static_cast<size_t>(hash::twang_mix64(key));
+  }
+};
+
+template<> struct hasher<std::string> {
+  size_t operator()(const std::string& key) const {
+    return static_cast<size_t>(
+        hash::SpookyHashV2::Hash64(key.data(), key.size(), 0));
   }
 };
 
@@ -442,5 +459,3 @@ namespace std {
     }
   };
 } // namespace std
-
-#endif

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -58,8 +58,12 @@ class MockAsyncSSLSocket : public AsyncSSLSocket{
   MOCK_CONST_METHOD0(getRawBytesWritten, size_t());
 
   // public wrapper for protected interface
-  ssize_t testPerformWrite(const iovec* vec, uint32_t count, WriteFlags flags,
-                           uint32_t* countWritten, uint32_t* partialWritten) {
+  WriteResult testPerformWrite(
+      const iovec* vec,
+      uint32_t count,
+      WriteFlags flags,
+      uint32_t* countWritten,
+      uint32_t* partialWritten) {
     return performWrite(vec, count, flags, countWritten, partialWritten);
   }
 
@@ -347,8 +351,8 @@ TEST_F(AsyncSSLSocketWriteTest, write_with_eor3) {
   int n = 1;
   auto vec = makeVec({1600});
   int pos = 0;
-  const size_t initAppBytesWritten = 500;
-  const size_t appEor = initAppBytesWritten + 1600;
+  static constexpr size_t initAppBytesWritten = 500;
+  static constexpr size_t appEor = initAppBytesWritten + 1600;
 
   sock_->setAppBytesWritten(initAppBytesWritten);
   sock_->setEorTracking(true);

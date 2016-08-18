@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@
 
 // @author: Andrei Alexandrescu
 
-#ifndef FOLLY_BASE_TRAITS_H_
-#define FOLLY_BASE_TRAITS_H_
+#pragma once
 
 #include <memory>
 #include <limits>
@@ -38,9 +37,7 @@
 #endif
 
 #include <boost/type_traits.hpp>
-#include <boost/mpl/and.hpp>
 #include <boost/mpl/has_xxx.hpp>
-#include <boost/mpl/not.hpp>
 
 namespace folly {
 
@@ -93,16 +90,15 @@ namespace folly {
 
 namespace traits_detail {
 
-#define FOLLY_HAS_TRUE_XXX(name)                          \
-  BOOST_MPL_HAS_XXX_TRAIT_DEF(name);                      \
-  template <class T> struct name ## _is_true              \
-    : std::is_same<typename T::name, std::true_type> {};  \
-  template <class T> struct has_true_ ## name             \
-    : std::conditional<                                   \
-        has_ ## name <T>::value,                          \
-        name ## _is_true<T>,                              \
-        std::false_type                                   \
-      >:: type {};
+#define FOLLY_HAS_TRUE_XXX(name)                                             \
+  BOOST_MPL_HAS_XXX_TRAIT_DEF(name)                                          \
+  template <class T>                                                         \
+  struct name##_is_true : std::is_same<typename T::name, std::true_type> {}; \
+  template <class T>                                                         \
+  struct has_true_##name : std::conditional<                                 \
+                               has_##name<T>::value,                         \
+                               name##_is_true<T>,                            \
+                               std::false_type>::type {};
 
 FOLLY_HAS_TRUE_XXX(IsRelocatable)
 FOLLY_HAS_TRUE_XXX(IsZeroInitializable)
@@ -132,6 +128,25 @@ template <class T> struct IsZeroInitializable
       !std::is_class<T>::value ||
       traits_detail::has_true_IsZeroInitializable<T>::value
     > {};
+
+template <typename...>
+struct Conjunction : std::true_type {};
+template <typename T>
+struct Conjunction<T> : T {};
+template <typename T, typename... TList>
+struct Conjunction<T, TList...>
+    : std::conditional<T::value, Conjunction<TList...>, T>::type {};
+
+template <typename...>
+struct Disjunction : std::false_type {};
+template <typename T>
+struct Disjunction<T> : T {};
+template <typename T, typename... TList>
+struct Disjunction<T, TList...>
+    : std::conditional<T::value, T, Disjunction<TList...>>::type {};
+
+template <typename T>
+struct Negation : std::integral_constant<bool, !T::value> {};
 
 } // namespace folly
 
@@ -240,8 +255,10 @@ FOLLY_NAMESPACE_STD_BEGIN
 template <class T, class U>
   struct pair;
 #ifndef _GLIBCXX_USE_FB
+FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN
 template <class T, class R, class A>
   class basic_string;
+FOLLY_GLIBCXX_NAMESPACE_CXX11_END
 #else
 template <class T, class R, class A, class S>
   class basic_string;
@@ -250,8 +267,10 @@ template <class T, class A>
   class vector;
 template <class T, class A>
   class deque;
+FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN
 template <class T, class A>
   class list;
+FOLLY_GLIBCXX_NAMESPACE_CXX11_END
 template <class T, class C, class A>
   class set;
 template <class K, class V, class C, class A>
@@ -267,8 +286,9 @@ template <class T> class shared_ptr;
 
 template <class T, class U>
 struct has_nothrow_constructor< std::pair<T, U> >
-    : ::boost::mpl::and_< has_nothrow_constructor<T>,
-                          has_nothrow_constructor<U> > {};
+    : std::integral_constant<bool,
+        has_nothrow_constructor<T>::value &&
+        has_nothrow_constructor<U>::value> {};
 
 } // namespace boost
 
@@ -276,8 +296,10 @@ namespace folly {
 
 // STL commonly-used types
 template <class T, class U>
-struct IsRelocatable<  std::pair<T, U> >
-    : ::boost::mpl::and_< IsRelocatable<T>, IsRelocatable<U> > {};
+struct IsRelocatable< std::pair<T, U> >
+    : std::integral_constant<bool,
+        IsRelocatable<T>::value &&
+        IsRelocatable<U>::value> {};
 
 // Is T one of T1, T2, ..., Tn?
 template <class T, class... Ts>
@@ -314,74 +336,31 @@ struct is_negative_impl<T, false> {
 
 // folly::to integral specializations can end up generating code
 // inside what are really static ifs (not executed because of the templated
-// types) that violate -Wsign-compare so suppress them in order to not prevent
-// all calling code from using it.
+// types) that violate -Wsign-compare and/or -Wbool-compare so suppress them
+// in order to not prevent all calling code from using it.
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsign-compare"
+#if __GNUC_PREREQ(5, 0)
+#pragma GCC diagnostic ignored "-Wbool-compare"
+#endif
 
 template <typename RHS, RHS rhs, typename LHS>
-bool less_than_impl(
-  typename std::enable_if<
-    (rhs <= std::numeric_limits<LHS>::max()
-      && rhs > std::numeric_limits<LHS>::min()),
-    LHS
-  >::type const lhs
-) {
-  return lhs < rhs;
+bool less_than_impl(LHS const lhs) {
+  return
+    rhs > std::numeric_limits<LHS>::max() ? true :
+    rhs <= std::numeric_limits<LHS>::min() ? false :
+    lhs < rhs;
 }
 
 template <typename RHS, RHS rhs, typename LHS>
-bool less_than_impl(
-  typename std::enable_if<
-    (rhs > std::numeric_limits<LHS>::max()),
-    LHS
-  >::type const
-) {
-  return true;
-}
-
-template <typename RHS, RHS rhs, typename LHS>
-bool less_than_impl(
-  typename std::enable_if<
-    (rhs <= std::numeric_limits<LHS>::min()),
-    LHS
-  >::type const
-) {
-  return false;
+bool greater_than_impl(LHS const lhs) {
+  return
+    rhs > std::numeric_limits<LHS>::max() ? false :
+    rhs < std::numeric_limits<LHS>::min() ? true :
+    lhs > rhs;
 }
 
 #pragma GCC diagnostic pop
-
-template <typename RHS, RHS rhs, typename LHS>
-bool greater_than_impl(
-  typename std::enable_if<
-    (rhs <= std::numeric_limits<LHS>::max()
-      && rhs >= std::numeric_limits<LHS>::min()),
-    LHS
-  >::type const lhs
-) {
-  return lhs > rhs;
-}
-
-template <typename RHS, RHS rhs, typename LHS>
-bool greater_than_impl(
-  typename std::enable_if<
-    (rhs > std::numeric_limits<LHS>::max()),
-    LHS
-  >::type const
-) {
-  return false;
-}
-
-template <typename RHS, RHS rhs, typename LHS>
-bool greater_than_impl(
-  typename std::enable_if<
-    (rhs < std::numeric_limits<LHS>::min()),
-    LHS
-  >::type const
-) {
-  return true;
-}
 
 } // namespace detail {
 
@@ -419,18 +398,73 @@ bool greater_than(LHS const lhs) {
   >(lhs);
 }
 
+/**
+ * Like std::piecewise_construct, a tag type & instance used for in-place
+ * construction of non-movable contained types, e.g. by Synchronized.
+ */
+struct construct_in_place_t {};
+constexpr construct_in_place_t construct_in_place{};
+
+/**
+ * Initializer lists are a powerful compile time syntax introduced in C++11
+ * but due to their often conflicting syntax they are not used by APIs for
+ * construction.
+ *
+ * Further standard conforming compilers *strongly* favor an
+ * std::initalizer_list overload for construction if one exists.  The
+ * following is a simple tag used to disambiguate construction with
+ * initializer lists and regular uniform initialization.
+ *
+ * For example consider the following case
+ *
+ *  class Something {
+ *  public:
+ *    explicit Something(int);
+ *    Something(std::intiializer_list<int>);
+ *
+ *    operator int();
+ *  };
+ *
+ *  ...
+ *  Something something{1}; // SURPRISE!!
+ *
+ * The last call to instantiate the Something object will go to the
+ * initializer_list overload.  Which may be surprising to users.
+ *
+ * If however this tag was used to disambiguate such construction it would be
+ * easy for users to see which construction overload their code was referring
+ * to.  For example
+ *
+ *  class Something {
+ *  public:
+ *    explicit Something(int);
+ *    Something(folly::initlist_construct_t, std::initializer_list<int>);
+ *
+ *    operator int();
+ *  };
+ *
+ *  ...
+ *  Something something_one{1}; // not the initializer_list overload
+ *  Something something_two{folly::initlist_construct, {1}}; // correct
+ */
+struct initlist_construct_t {};
+constexpr initlist_construct_t initlist_construct{};
+
 } // namespace folly
 
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_3(std::basic_string);
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::vector);
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::list);
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::deque);
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::unique_ptr);
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(std::shared_ptr);
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(std::function);
+// gcc-5.0 changed string's implementation in libgcc to be non-relocatable
+#if __GNUC__ < 5
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_3(std::basic_string)
+#endif
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::vector)
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::list)
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::deque)
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::unique_ptr)
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(std::shared_ptr)
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(std::function)
 
 // Boost
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(boost::shared_ptr);
+FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(boost::shared_ptr)
 
 #define FOLLY_CREATE_HAS_MEMBER_TYPE_TRAITS(classname, type_name) \
   template <typename T> \
@@ -513,5 +547,3 @@ FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(boost::shared_ptr);
       classname, func_name, /* nolint */ volatile); \
   FOLLY_CREATE_HAS_MEMBER_FN_TRAITS_IMPL( \
       classname, func_name, /* nolint */ volatile const)
-
-#endif //FOLLY_BASE_TRAITS_H_

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_DETAIL_MEMORYIDLER_H
-#define FOLLY_DETAIL_MEMORYIDLER_H
+#pragma once
 
 #include <atomic>
 #include <chrono>
@@ -23,6 +22,7 @@
 #include <folly/Hash.h>
 #include <folly/Traits.h>
 #include <folly/detail/Futex.h>
+#include <folly/portability/PThread.h>
 
 namespace folly {
 
@@ -149,5 +149,3 @@ struct MemoryIdler {
 };
 
 }} // namespace folly::detail
-
-#endif

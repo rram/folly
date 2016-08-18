@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_FORMATARG_H_
-#define FOLLY_FORMATARG_H_
+#pragma once
 
 #include <stdexcept>
 #include <folly/Conv.h>
@@ -82,7 +81,7 @@ struct FormatArg {
   template <typename... Args>
   std::string errorStr(Args&&... args) const;
   template <typename... Args>
-  FOLLY_NORETURN void error(Args&&... args) const;
+  [[noreturn]] void error(Args&&... args) const;
 
   /**
    * Full argument string, as passed in to the constructor.
@@ -212,7 +211,7 @@ inline std::string FormatArg::errorStr(Args&&... args) const {
 }
 
 template <typename... Args>
-inline void FormatArg::error(Args&&... args) const {
+[[noreturn]] inline void FormatArg::error(Args&&... args) const {
   throw BadFormatArg(errorStr(std::forward<Args>(args)...));
 }
 
@@ -275,5 +274,3 @@ inline int FormatArg::splitIntKey() {
 }
 
 }  // namespace folly
-
-#endif /* FOLLY_FORMATARG_H_ */

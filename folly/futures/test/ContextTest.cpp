@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ class TestData : public RequestData {
 TEST(Context, basic) {
 
   // Start a new context
-  RequestContext::create();
+  folly::RequestContextScopeGuard rctx;
 
   EXPECT_EQ(nullptr, RequestContext::get()->getContextData("test"));
 

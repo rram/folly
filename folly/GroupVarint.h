@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_GROUPVARINT_H_
-#define FOLLY_GROUPVARINT_H_
+#pragma once
 
 #if !defined(__GNUC__) && !defined(_MSC_VER)
 #error GroupVarint.h requires GCC or MSVC
@@ -23,7 +22,7 @@
 
 #include <folly/Portability.h>
 
-#if FOLLY_X64 || defined(__i386__)
+#if FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 || FOLLY_A64
 #define HAVE_GROUP_VARINT 1
 
 #include <cstdint>
@@ -31,13 +30,14 @@
 #include <folly/detail/GroupVarintDetail.h>
 #include <folly/Bits.h>
 #include <folly/Range.h>
+#include <folly/portability/Builtins.h>
 #include <glog/logging.h>
 
 #if FOLLY_SSE >= 3
-#include <x86intrin.h>
+#include <nmmintrin.h>
 namespace folly {
 namespace detail {
-extern const __m128i groupVarintSSEMasks[];
+alignas(16) extern const uint64_t groupVarintSSEMasks[];
 }  // namespace detail
 }  // namespace folly
 #endif
@@ -196,7 +196,8 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
   static const char* decode(const char* p, uint32_t* dest) {
     uint8_t key = p[0];
     __m128i val = _mm_loadu_si128((const __m128i*)(p+1));
-    __m128i mask = detail::groupVarintSSEMasks[key];
+    __m128i mask =
+        _mm_load_si128((const __m128i*)&detail::groupVarintSSEMasks[key * 2]);
     __m128i r = _mm_shuffle_epi8(val, mask);
     _mm_storeu_si128((__m128i*)dest, r);
     return p + detail::groupVarintLengths[key];
@@ -210,7 +211,8 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
                             uint32_t* c, uint32_t* d) {
     uint8_t key = p[0];
     __m128i val = _mm_loadu_si128((const __m128i*)(p+1));
-    __m128i mask = detail::groupVarintSSEMasks[key];
+    __m128i mask =
+        _mm_load_si128((const __m128i*)&detail::groupVarintSSEMasks[key * 2]);
     __m128i r = _mm_shuffle_epi8(val, mask);
 
     // Extracting 32 bits at a time out of an XMM register is a SSE4 feature
@@ -617,5 +619,4 @@ typedef GroupVarintDecoder<uint64_t> GroupVarint64Decoder;
 
 }  // namespace folly
 
-#endif /* FOLLY_X64 || defined(__i386__) */
-#endif /* FOLLY_GROUPVARINT_H_ */
+#endif /* FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 */

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ struct ManualWaiter : public DrivableExecutor {
   explicit ManualWaiter(std::shared_ptr<ManualExecutor> ex) : ex(ex) {}
 
   void add(Func f) override {
-    ex->add(f);
+    ex->add(std::move(f));
   }
 
   void drive() override {
@@ -124,14 +124,16 @@ TEST(Via, thenFunction) {
 
 TEST_F(ViaFixture, threadHops) {
   auto westThreadId = std::this_thread::get_id();
-  auto f = via(eastExecutor.get()).then([=](Try<Unit>&& t) {
-    EXPECT_NE(std::this_thread::get_id(), westThreadId);
-    return makeFuture<int>(1);
-  }).via(westExecutor.get()
-  ).then([=](Try<int>&& t) {
-    EXPECT_EQ(std::this_thread::get_id(), westThreadId);
-    return t.value();
-  });
+  auto f = via(eastExecutor.get())
+               .then([=](Try<Unit>&& /* t */) {
+                 EXPECT_NE(std::this_thread::get_id(), westThreadId);
+                 return makeFuture<int>(1);
+               })
+               .via(westExecutor.get())
+               .then([=](Try<int>&& t) {
+                 EXPECT_EQ(std::this_thread::get_id(), westThreadId);
+                 return t.value();
+               });
   EXPECT_EQ(f.getVia(waiter.get()), 1);
 }
 
@@ -189,7 +191,7 @@ TEST(Via, chain3) {
 }
 
 struct PriorityExecutor : public Executor {
-  void add(Func f) override {}
+  void add(Func /* f */) override {}
 
   void addWithPriority(Func f, int8_t priority) override {
     int mid = getNumPriorities() / 2;
@@ -371,7 +373,7 @@ TEST(Via, callbackRace) {
 
 class DummyDrivableExecutor : public DrivableExecutor {
  public:
-  void add(Func f) override {}
+  void add(Func /* f */) override {}
   void drive() override { ran = true; }
   bool ran{false};
 };
@@ -492,4 +494,11 @@ TEST(ViaFunc, isSticky) {
   EXPECT_EQ(1, count);
   x.run();
   EXPECT_EQ(2, count);
+}
+
+TEST(ViaFunc, moveOnly) {
+  ManualExecutor x;
+  auto intp = folly::make_unique<int>(42);
+
+  EXPECT_EQ(42, via(&x, [intp = std::move(intp)] { return *intp; }).getVia(&x));
 }

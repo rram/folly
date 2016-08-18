@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,11 @@ TEST(Promise, getFuture) {
   Promise<int> p;
   Future<int> f = p.getFuture();
   EXPECT_FALSE(f.isReady());
+}
+
+TEST(Promise, setValueUnit) {
+  Promise<Unit> p;
+  p.setValue();
 }
 
 TEST(Promise, setValue) {
@@ -125,4 +130,35 @@ TEST(Promise, isFulfilledWithFuture) {
   EXPECT_FALSE(p.isFulfilled());
   p.setValue(42); // after here
   EXPECT_TRUE(p.isFulfilled());
+}
+
+TEST(Promise, brokenOnDelete) {
+  auto p = folly::make_unique<Promise<int>>();
+  auto f = p->getFuture();
+
+  EXPECT_FALSE(f.isReady());
+
+  p.reset();
+
+  EXPECT_TRUE(f.isReady());
+
+  auto t = f.getTry();
+
+  EXPECT_TRUE(t.hasException<BrokenPromise>());
+}
+
+TEST(Promise, brokenPromiseHasTypeInfo) {
+  auto pInt = folly::make_unique<Promise<int>>();
+  auto fInt = pInt->getFuture();
+
+  auto pFloat = folly::make_unique<Promise<float>>();
+  auto fFloat = pFloat->getFuture();
+
+  pInt.reset();
+  pFloat.reset();
+
+  auto whatInt = fInt.getTry().exception().what();
+  auto whatFloat = fFloat.getTry().exception().what();
+
+  EXPECT_NE(whatInt, whatFloat);
 }

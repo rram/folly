@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,20 +16,22 @@
 
 // @author Tudor Bosman (tudorb@fb.com)
 
-#include <gflags/gflags.h>
 #include <folly/Bits.h>
-#include <folly/Benchmark.h>
+
 #include <gtest/gtest.h>
 
 using namespace folly;
 
 // Test constexpr-ness.
-#ifndef __clang__
+#if !defined(__clang__) && !defined(_MSC_VER)
 static_assert(findFirstSet(2u) == 2, "findFirstSet");
 static_assert(findLastSet(2u) == 2, "findLastSet");
 static_assert(nextPowTwo(2u) == 2, "nextPowTwo");
+#endif
+
+#ifndef __clang__
 static_assert(isPowTwo(2u), "isPowTwo");
-#endif  // __clang__
+#endif
 
 namespace {
 
@@ -89,39 +91,27 @@ TEST(Bits, FindLastSet) {
   testFLS<unsigned long long>();
 }
 
-#define testPowTwo(nextPowTwoFunc) {                              \
-  EXPECT_EQ(1, nextPowTwoFunc(0u));                               \
-  EXPECT_EQ(1, nextPowTwoFunc(1u));                               \
-  EXPECT_EQ(2, nextPowTwoFunc(2u));                               \
-  EXPECT_EQ(4, nextPowTwoFunc(3u));                               \
-  EXPECT_EQ(4, nextPowTwoFunc(4u));                               \
-  EXPECT_EQ(8, nextPowTwoFunc(5u));                               \
-  EXPECT_EQ(8, nextPowTwoFunc(6u));                               \
-  EXPECT_EQ(8, nextPowTwoFunc(7u));                               \
-  EXPECT_EQ(8, nextPowTwoFunc(8u));                               \
-  EXPECT_EQ(16, nextPowTwoFunc(9u));                              \
-  EXPECT_EQ(16, nextPowTwoFunc(13u));                             \
-  EXPECT_EQ(16, nextPowTwoFunc(16u));                             \
-  EXPECT_EQ(512, nextPowTwoFunc(510u));                           \
-  EXPECT_EQ(512, nextPowTwoFunc(511u));                           \
-  EXPECT_EQ(512, nextPowTwoFunc(512u));                           \
-  EXPECT_EQ(1024, nextPowTwoFunc(513u));                          \
-  EXPECT_EQ(1024, nextPowTwoFunc(777u));                          \
-  EXPECT_EQ(1ul << 31, nextPowTwoFunc((1ul << 31) - 1));          \
-  EXPECT_EQ(1ul << 32, nextPowTwoFunc((1ul << 32) - 1));          \
-  EXPECT_EQ(1ull << 63, nextPowTwoFunc((1ull << 62) + 1));        \
-}
-
-
 TEST(Bits, nextPowTwoClz) {
-  testPowTwo(nextPowTwo);
-}
-
-BENCHMARK(nextPowTwoClz, iters) {
-  for (unsigned long i = 0; i < iters; ++i) {
-    auto x = folly::nextPowTwo(iters);
-    folly::doNotOptimizeAway(x);
-  }
+  EXPECT_EQ(1, nextPowTwo(0u));
+  EXPECT_EQ(1, nextPowTwo(1u));
+  EXPECT_EQ(2, nextPowTwo(2u));
+  EXPECT_EQ(4, nextPowTwo(3u));
+  EXPECT_EQ(4, nextPowTwo(4u));
+  EXPECT_EQ(8, nextPowTwo(5u));
+  EXPECT_EQ(8, nextPowTwo(6u));
+  EXPECT_EQ(8, nextPowTwo(7u));
+  EXPECT_EQ(8, nextPowTwo(8u));
+  EXPECT_EQ(16, nextPowTwo(9u));
+  EXPECT_EQ(16, nextPowTwo(13u));
+  EXPECT_EQ(16, nextPowTwo(16u));
+  EXPECT_EQ(512, nextPowTwo(510u));
+  EXPECT_EQ(512, nextPowTwo(511u));
+  EXPECT_EQ(512, nextPowTwo(512u));
+  EXPECT_EQ(1024, nextPowTwo(513u));
+  EXPECT_EQ(1024, nextPowTwo(777u));
+  EXPECT_EQ(1ul << 31, nextPowTwo((1ul << 31) - 1));
+  EXPECT_EQ(1ull << 32, nextPowTwo((1ull << 32) - 1));
+  EXPECT_EQ(1ull << 63, nextPowTwo((1ull << 62) + 1));
 }
 
 TEST(Bits, isPowTwo) {
@@ -146,37 +136,9 @@ TEST(Bits, isPowTwo) {
   EXPECT_FALSE(isPowTwo((1ull<<63) + 1));
 }
 
-BENCHMARK_DRAW_LINE();
-BENCHMARK(isPowTwo, iters) {
-  bool b;
-  for (unsigned long i = 0; i < iters; ++i) {
-    b = folly::isPowTwo(i);
-    folly::doNotOptimizeAway(b);
-  }
-}
-
 TEST(Bits, popcount) {
   EXPECT_EQ(0, popcount(0U));
   EXPECT_EQ(1, popcount(1U));
   EXPECT_EQ(32, popcount(uint32_t(-1)));
   EXPECT_EQ(64, popcount(uint64_t(-1)));
 }
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  auto ret = RUN_ALL_TESTS();
-  if (!ret && FLAGS_benchmark) {
-    folly::runBenchmarks();
-  }
-  return ret;
-}
-
-/*
-Benchmarks run on dual Xeon X5650's @ 2.67GHz w/hyperthreading enabled
-  (12 physical cores, 12 MB cache, 72 GB RAM)
-
-Benchmark                               Iters   Total t    t/iter iter/sec
-------------------------------------------------------------------------------
-*       nextPowTwoClz                 1000000  1.659 ms  1.659 ns  574.8 M
-*/

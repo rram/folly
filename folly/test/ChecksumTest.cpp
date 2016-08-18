@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,13 @@
  */
 
 #include <folly/Checksum.h>
-#include <gflags/gflags.h>
+
 #include <gtest/gtest.h>
+
 #include <folly/Benchmark.h>
 #include <folly/Hash.h>
 #include <folly/detail/ChecksumDetail.h>
+#include <folly/portability/GFlags.h>
 
 namespace {
 const unsigned int BUFFER_SIZE = 512 * 1024 * sizeof(uint64_t);

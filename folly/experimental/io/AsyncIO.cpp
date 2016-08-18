@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include <folly/experimental/io/AsyncIO.h>
 
 #include <sys/eventfd.h>
-#include <unistd.h>
 #include <cerrno>
 #include <ostream>
 #include <stdexcept>
@@ -30,6 +29,7 @@
 #include <folly/Format.h>
 #include <folly/Likely.h>
 #include <folly/String.h>
+#include <folly/portability/Unistd.h>
 
 namespace folly {
 
@@ -277,9 +277,7 @@ void AsyncIOQueue::submit(OpFactory op) {
   maybeDequeue();
 }
 
-void AsyncIOQueue::onCompleted(AsyncIOOp* op) {
-  maybeDequeue();
-}
+void AsyncIOQueue::onCompleted(AsyncIOOp* /* op */) { maybeDequeue(); }
 
 void AsyncIOQueue::maybeDequeue() {
   while (!queue_.empty() && asyncIO_->pending() < asyncIO_->capacity()) {
@@ -348,11 +346,13 @@ std::ostream& operator<<(std::ostream& os, const iocb& cb) {
   switch (cb.aio_lio_opcode) {
     case IO_CMD_PREAD:
     case IO_CMD_PWRITE:
-      os << folly::format("buf={}, off={}, size={}, ",
-                          cb.u.c.buf, cb.u.c.nbytes, cb.u.c.offset);
+      os << folly::format("buf={}, offset={}, nbytes={}, ",
+                          cb.u.c.buf, cb.u.c.offset, cb.u.c.nbytes);
+      break;
     default:
       os << "[TODO: write debug string for "
          << iocbCmdToString(cb.aio_lio_opcode) << "] ";
+      break;
   }
 
   return os;

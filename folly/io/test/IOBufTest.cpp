@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,14 +17,13 @@
 #include <folly/io/IOBuf.h>
 #include <folly/io/TypedIOBuf.h>
 
-#include <gflags/gflags.h>
+#include <cstddef>
+
 #include <boost/random.hpp>
 #include <gtest/gtest.h>
 
 #include <folly/Malloc.h>
 #include <folly/Range.h>
-
-#include <cstddef>
 
 using folly::fbstring;
 using folly::fbvector;
@@ -187,6 +186,14 @@ TEST(IOBuf, WrapBuffer) {
   EXPECT_EQ(size3, iobuf3.length());
   EXPECT_EQ(buf3.get(), iobuf3.buffer());
   EXPECT_EQ(size3, iobuf3.capacity());
+
+  const uint32_t size4 = 2345;
+  unique_ptr<uint8_t[]> buf4(new uint8_t[size4]);
+  IOBuf iobuf4 = IOBuf::wrapBufferAsValue(buf4.get(), size4);
+  EXPECT_EQ(buf4.get(), iobuf4.data());
+  EXPECT_EQ(size4, iobuf4.length());
+  EXPECT_EQ(buf4.get(), iobuf4.buffer());
+  EXPECT_EQ(size4, iobuf4.capacity());
 }
 
 TEST(IOBuf, CreateCombined) {
@@ -628,7 +635,6 @@ TEST(IOBuf, Reserve) {
     EXPECT_EQ(0, iob->headroom());
     EXPECT_EQ(100, iob->length());
     const void* p1 = iob->buffer();
-    const uint8_t* d1 = iob->data();
     iob->reserve(100, 2512);  // allocation sizes are multiples of 256
     EXPECT_LE(100, iob->headroom());
     if (folly::usingJEMalloc()) {
@@ -1150,6 +1156,53 @@ TEST(IOBuf, CopyConstructorAndAssignmentOperator) {
   EXPECT_FALSE(buf->isShared());
 }
 
+TEST(IOBuf, CloneAsValue) {
+  auto buf = IOBuf::create(4096);
+  append(buf, "hello world");
+  {
+    auto buf2 = IOBuf::create(4096);
+    append(buf2, " goodbye");
+    buf->prependChain(std::move(buf2));
+    EXPECT_FALSE(buf->isShared());
+  }
+
+  {
+    auto copy = buf->cloneOneAsValue();
+    EXPECT_TRUE(buf->isShared());
+    EXPECT_TRUE(copy.isShared());
+    EXPECT_EQ((void*)buf->data(), (void*)copy.data());
+    EXPECT_TRUE(buf->isChained());
+    EXPECT_FALSE(copy.isChained());
+
+    auto copy2 = buf->cloneAsValue();
+    EXPECT_TRUE(buf->isShared());
+    EXPECT_TRUE(copy.isShared());
+    EXPECT_TRUE(copy2.isShared());
+    EXPECT_TRUE(buf->isChained());
+    EXPECT_TRUE(copy2.isChained());
+
+    copy.unshareOne();
+    EXPECT_TRUE(buf->isShared());
+    EXPECT_FALSE(copy.isShared());
+    EXPECT_NE((void*)buf->data(), (void*)copy.data());
+    EXPECT_TRUE(copy2.isShared());
+
+    auto p = reinterpret_cast<const char*>(copy.data());
+    EXPECT_EQ("hello world", std::string(p, copy.length()));
+
+    copy2.coalesce();
+    EXPECT_FALSE(buf->isShared());
+    EXPECT_FALSE(copy.isShared());
+    EXPECT_FALSE(copy2.isShared());
+    EXPECT_FALSE(copy2.isChained());
+
+    auto p2 = reinterpret_cast<const char*>(copy2.data());
+    EXPECT_EQ("hello world goodbye", std::string(p2, copy2.length()));
+  }
+
+  EXPECT_FALSE(buf->isShared());
+}
+
 namespace {
 // Use with string literals only
 std::unique_ptr<IOBuf> wrap(const char* str) {
@@ -1175,6 +1228,45 @@ char* writableStr(folly::IOBuf& buf) {
 }
 
 }  // namespace
+
+TEST(IOBuf, ExternallyShared) {
+  struct Item {
+    Item(const char* src, size_t len) : size(len) {
+      CHECK_LE(len, sizeof(buffer));
+      memcpy(buffer, src, len);
+    }
+    uint32_t refcount{0};
+    uint8_t size;
+    char buffer[256];
+  };
+
+  auto hello = "hello";
+  struct Item it(hello, strlen(hello));
+
+  {
+    auto freeFn = [](void* /* unused */, void* userData) {
+      auto it = static_cast<struct Item*>(userData);
+      it->refcount--;
+    };
+    it.refcount++;
+    auto buf1 = IOBuf::takeOwnership(it.buffer, it.size, freeFn, &it);
+    EXPECT_TRUE(buf1->isManagedOne());
+    EXPECT_FALSE(buf1->isSharedOne());
+
+    buf1->markExternallyShared();
+    EXPECT_TRUE(buf1->isSharedOne());
+
+    {
+      auto buf2 = buf1->clone();
+      EXPECT_TRUE(buf2->isManagedOne());
+      EXPECT_TRUE(buf2->isSharedOne());
+      EXPECT_EQ(buf1->data(), buf2->data());
+      EXPECT_EQ(it.refcount, 1);
+    }
+    EXPECT_EQ(it.refcount, 1);
+  }
+  EXPECT_EQ(it.refcount, 0);
+}
 
 TEST(IOBuf, Managed) {
   auto hello = "hello";
@@ -1233,11 +1325,4 @@ TEST(IOBuf, Managed) {
   writableStr(*buf1)[0] = 'j';
   writableStr(*buf2)[0] = 'x';
   EXPECT_EQ("jelloxorldhelloxorld", toString(*buf1));
-}
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-
-  return RUN_ALL_TESTS();
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements. See the NOTICE file
@@ -21,6 +21,8 @@
 #include <folly/io/async/HHWheelTimer.h>
 #include <folly/io/async/Request.h>
 
+#include <folly/Memory.h>
+#include <folly/Optional.h>
 #include <folly/ScopeGuard.h>
 
 #include <cassert>
@@ -75,27 +77,33 @@ void HHWheelTimer::Callback::cancelTimeoutImpl() {
   expiration_ = milliseconds(0);
 }
 
-HHWheelTimer::HHWheelTimer(folly::EventBase* eventBase,
-                           std::chrono::milliseconds intervalMS,
-                           AsyncTimeout::InternalEnum internal,
-                           std::chrono::milliseconds defaultTimeoutMS)
-  : AsyncTimeout(eventBase, internal)
-  , interval_(intervalMS)
-  , defaultTimeout_(defaultTimeoutMS)
-  , nextTick_(1)
-  , count_(0)
-  , catchupEveryN_(DEFAULT_CATCHUP_EVERY_N)
-  , expirationsSinceCatchup_(0)
-  , processingCallbacksGuard_(false)
-{
-}
+HHWheelTimer::HHWheelTimer(
+    folly::TimeoutManager* timeoutMananger,
+    std::chrono::milliseconds intervalMS,
+    AsyncTimeout::InternalEnum internal,
+    std::chrono::milliseconds defaultTimeoutMS)
+    : AsyncTimeout(timeoutMananger, internal),
+      interval_(intervalMS),
+      defaultTimeout_(defaultTimeoutMS),
+      nextTick_(1),
+      count_(0),
+      processingCallbacksGuard_(nullptr) {}
 
 HHWheelTimer::~HHWheelTimer() {
-}
-
-void HHWheelTimer::destroy() {
-  assert(count_ == 0);
-  DelayedDestruction::destroy();
+  // Ensure this gets done, but right before destruction finishes.
+  auto destructionPublisherGuard = folly::makeGuard([&] {
+    // Inform the subscriber that this instance is doomed.
+    if (processingCallbacksGuard_) {
+      *processingCallbacksGuard_ = true;
+    }
+  });
+  while (!timeouts.empty()) {
+    auto* cb = &timeouts.front();
+    timeouts.pop_front();
+    cb->cancelTimeout();
+    cb->callbackCanceled();
+  }
+  cancelAll();
 }
 
 void HHWheelTimer::scheduleTimeoutImpl(Callback* callback,
@@ -159,28 +167,26 @@ bool HHWheelTimer::cascadeTimers(int bucket, int tick) {
 }
 
 void HHWheelTimer::timeoutExpired() noexcept {
-  // If destroy() is called inside timeoutExpired(), delay actual destruction
-  // until timeoutExpired() returns
-  DestructorGuard dg(this);
+  // If the last smart pointer for "this" is reset inside the callback's
+  // timeoutExpired(), then the guard will detect that it is time to bail from
+  // this method.
+  auto isDestroyed = false;
   // If scheduleTimeout is called from a callback in this function, it may
   // cause inconsistencies in the state of this object. As such, we need
   // to treat these calls slightly differently.
-  processingCallbacksGuard_ = true;
+  CHECK(!processingCallbacksGuard_);
+  processingCallbacksGuard_ = &isDestroyed;
   auto reEntryGuard = folly::makeGuard([&] {
-    processingCallbacksGuard_ = false;
+    if (!isDestroyed) {
+      processingCallbacksGuard_ = nullptr;
+    }
   });
 
   // timeoutExpired() can only be invoked directly from the event base loop.
   // It should never be invoked recursively.
   //
-  milliseconds catchup = now_ + interval_;
-  // If catchup is enabled, we may have missed multiple intervals, use
-  // currentTime() to check exactly.
-  if (++expirationsSinceCatchup_ >= catchupEveryN_) {
-    catchup = std::chrono::duration_cast<milliseconds>(
+  milliseconds catchup = std::chrono::duration_cast<milliseconds>(
       std::chrono::steady_clock::now().time_since_epoch());
-    expirationsSinceCatchup_ = 0;
-  }
   while (now_ < catchup) {
     now_ += interval_;
 
@@ -198,13 +204,23 @@ void HHWheelTimer::timeoutExpired() noexcept {
     while (!cbs->empty()) {
       auto* cb = &cbs->front();
       cbs->pop_front();
-      count_--;
-      cb->wheel_ = nullptr;
-      cb->expiration_ = milliseconds(0);
-      auto old_ctx =
-        RequestContext::setContext(cb->context_);
-      cb->timeoutExpired();
-      RequestContext::setContext(old_ctx);
+      timeouts.push_back(*cb);
+    }
+  }
+
+  while (!timeouts.empty()) {
+    auto* cb = &timeouts.front();
+    timeouts.pop_front();
+    count_--;
+    cb->wheel_ = nullptr;
+    cb->expiration_ = milliseconds(0);
+    RequestContextScopeGuard rctx(cb->context_);
+    cb->timeoutExpired();
+    if (isDestroyed) {
+      // The HHWheelTimer itself has been destroyed. The other callbacks
+      // will have been cancelled from the destructor. Bail before causing
+      // damage.
+      return;
     }
   }
   if (count_ > 0) {
@@ -213,30 +229,32 @@ void HHWheelTimer::timeoutExpired() noexcept {
 }
 
 size_t HHWheelTimer::cancelAll() {
-  decltype(buckets_) buckets;
-
-// Work around std::swap() bug in libc++
-//
-// http://llvm.org/bugs/show_bug.cgi?id=22106
-#if FOLLY_USE_LIBCPP
-  for (size_t i = 0; i < WHEEL_BUCKETS; ++i) {
-    for (size_t ii = 0; ii < WHEEL_SIZE; ++ii) {
-      std::swap(buckets_[i][ii], buckets[i][ii]);
-    }
-  }
-#else
-  std::swap(buckets, buckets_);
-#endif
-
   size_t count = 0;
 
-  for (auto& tick : buckets) {
-    for (auto& bucket : tick) {
+  if (count_ != 0) {
+    const uint64_t numElements = WHEEL_BUCKETS * WHEEL_SIZE;
+    auto maxBuckets = std::min(numElements, count_);
+    auto buckets = folly::make_unique<CallbackList[]>(maxBuckets);
+    size_t countBuckets = 0;
+    for (auto& tick : buckets_) {
+      for (auto& bucket : tick) {
+        if (bucket.empty()) {
+          continue;
+        }
+        count += bucket.size();
+        std::swap(bucket, buckets[countBuckets++]);
+        if (count >= count_) {
+          break;
+        }
+      }
+    }
+
+    for (size_t i = 0; i < countBuckets; ++i) {
+      auto& bucket = buckets[i];
       while (!bucket.empty()) {
         auto& cb = bucket.front();
         cb.cancelTimeout();
         cb.callbackCanceled();
-        count++;
       }
     }
   }

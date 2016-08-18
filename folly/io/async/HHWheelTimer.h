@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <folly/Optional.h>
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/DelayedDestruction.h>
 
@@ -24,8 +25,8 @@
 
 #include <chrono>
 #include <cstddef>
-#include <memory>
 #include <list>
+#include <memory>
 
 namespace folly {
 
@@ -33,7 +34,7 @@ namespace folly {
  * Hashed Hierarchical Wheel Timer
  *
  * Comparison:
- * TAsyncTimeout - a single timeout.
+ * AsyncTimeout - a single timeout.
  * HHWheelTimer - a set of efficient timeouts with different interval,
  *    but timeouts are not exact.
  *
@@ -58,7 +59,14 @@ namespace folly {
 class HHWheelTimer : private folly::AsyncTimeout,
                      public folly::DelayedDestruction {
  public:
-  typedef std::unique_ptr<HHWheelTimer, Destructor> UniquePtr;
+  // This type has always been a misnomer, because it is not a unique pointer.
+  using UniquePtr = std::unique_ptr<HHWheelTimer, Destructor>;
+  using SharedPtr = std::shared_ptr<HHWheelTimer>;
+
+  template <typename... Args>
+  static UniquePtr newTimer(Args&&... args) {
+    return UniquePtr(new HHWheelTimer(std::forward<Args>(args)...));
+  }
 
   /**
    * A callback to be notified when a timeout has expired.
@@ -157,22 +165,13 @@ class HHWheelTimer : private folly::AsyncTimeout,
    * interval timeouts using scheduleTimeout(callback) method.
    */
   static int DEFAULT_TICK_INTERVAL;
-  explicit HHWheelTimer(folly::EventBase* eventBase,
-                        std::chrono::milliseconds intervalMS =
-                        std::chrono::milliseconds(DEFAULT_TICK_INTERVAL),
-                        AsyncTimeout::InternalEnum internal =
-                        AsyncTimeout::InternalEnum::NORMAL,
-                        std::chrono::milliseconds defaultTimeoutMS =
-                        std::chrono::milliseconds(-1));
-
-  /**
-   * Destroy the HHWheelTimer.
-   *
-   * A HHWheelTimer should only be destroyed when there are no more
-   * callbacks pending in the set. (If it helps you may use cancelAll() to
-   * cancel all pending timeouts explicitly before calling this.)
-   */
-  virtual void destroy();
+  explicit HHWheelTimer(
+      folly::TimeoutManager* timeoutManager,
+      std::chrono::milliseconds intervalMS =
+          std::chrono::milliseconds(DEFAULT_TICK_INTERVAL),
+      AsyncTimeout::InternalEnum internal = AsyncTimeout::InternalEnum::NORMAL,
+      std::chrono::milliseconds defaultTimeoutMS =
+          std::chrono::milliseconds(-1));
 
   /**
    * Cancel all outstanding timeouts
@@ -213,7 +212,7 @@ class HHWheelTimer : private folly::AsyncTimeout,
 
   /**
    * Schedule the specified Callback to be invoked after the
-   * fefault timeout interval.
+   * default timeout interval.
    *
    * If the callback is already scheduled, this cancels the existing timeout
    * before scheduling the new timeout.
@@ -251,20 +250,6 @@ class HHWheelTimer : private folly::AsyncTimeout,
     return count_;
   }
 
-  /**
-   * This turns on more exact timing.  By default the wheel timer
-   * increments its cached time only once everyN (default) ticks.
-   *
-   * With catchupEveryN at 1, timeouts will only be delayed until the
-   * next tick, at which point all overdue timeouts are called.  The
-   * wheel timer is approximately 2x slower with this set to 1.
-   *
-   * Load testing in opt mode showed skew was about 1% with no catchup.
-   */
-  void setCatchupEveryN(uint32_t everyN) {
-    catchupEveryN_ = everyN;
-  }
-
   bool isDetachable() const {
     return !folly::AsyncTimeout::isScheduled();
   }
@@ -287,7 +272,7 @@ class HHWheelTimer : private folly::AsyncTimeout,
   HHWheelTimer(HHWheelTimer const &) = delete;
   HHWheelTimer& operator=(HHWheelTimer const &) = delete;
 
-  // Methods inherited from TAsyncTimeout
+  // Methods inherited from AsyncTimeout
   virtual void timeoutExpired() noexcept;
 
   std::chrono::milliseconds interval_;
@@ -311,11 +296,8 @@ class HHWheelTimer : private folly::AsyncTimeout,
   uint64_t count_;
   std::chrono::milliseconds now_;
 
-  static constexpr uint32_t DEFAULT_CATCHUP_EVERY_N = 10;
-
-  uint32_t catchupEveryN_;
-  uint32_t expirationsSinceCatchup_;
-  bool processingCallbacksGuard_;
+  bool* processingCallbacksGuard_;
+  CallbackList timeouts; // Timeouts queued to run
 };
 
 } // folly

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,40 +25,17 @@
 
 using namespace folly;
 
-namespace {
-class disposable {
- public:
-  explicit disposable(std::function<void()> onDispose) :
-    onDispose_(std::move(onDispose)) {}
-  static void dispose(disposable* f) {
-    ASSERT_NE(nullptr, f);
-    f->onDispose_();
-    delete f;
-  }
- private:
-  std::function<void()> onDispose_;
-};
+TEST(make_unique, compatible_with_std_make_unique) {
+  //  HACK: To enforce that `folly::` is imported here.
+  to_shared_ptr(std::unique_ptr<std::string>());
+
+  using namespace std;
+  make_unique<string>("hello, world");
 }
 
-TEST(static_function_deleter, example) {
-  size_t count = 0;
-  using disposable_deleter =
-    static_function_deleter<disposable, &disposable::dispose>;
-  make_unique<disposable, disposable_deleter>([&] { ++count; });
-  EXPECT_EQ(1, count);
-}
-
-TEST(static_function_deleter, nullptr) {
-  using disposable_deleter =
-    static_function_deleter<disposable, &disposable::dispose>;
-  std::unique_ptr<disposable, disposable_deleter>(nullptr);
-}
-
-TEST(shared_ptr, example) {
-  auto uptr = make_unique<std::string>("hello");
-  auto sptr = to_shared_ptr(std::move(uptr));
-  EXPECT_EQ(nullptr, uptr);
-  EXPECT_EQ("hello", *sptr);
+TEST(allocate_sys_buffer, compiles) {
+  auto buf = allocate_sys_buffer(256);
+  //  Freed at the end of the scope.
 }
 
 template <std::size_t> struct T {};
@@ -120,12 +97,4 @@ TEST(rebind_allocator, sanity_check) {
   EXPECT_EQ("HELLO, WORLD", *s);
   s.reset();
   ASSERT_EQ(nullptr, s.get());
-}
-
-int main(int argc, char **argv) {
-  FLAGS_logtostderr = true;
-  google::InitGoogleLogging(argv[0]);
-  testing::InitGoogleTest(&argc, argv);
-
-  return RUN_ALL_TESTS();
 }

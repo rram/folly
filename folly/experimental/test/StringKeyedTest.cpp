@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,18 +15,19 @@
  */
 // Copyright 2013-present Facebook. All Rights Reserved.
 
-#include <gflags/gflags.h>
-#include <glog/logging.h>
-#include <gtest/gtest.h>
-
-#include <string>
-#include <list>
-
-#include <folly/Range.h>
 #include <folly/experimental/StringKeyedMap.h>
 #include <folly/experimental/StringKeyedSet.h>
 #include <folly/experimental/StringKeyedUnorderedMap.h>
 #include <folly/experimental/StringKeyedUnorderedSet.h>
+
+#include <list>
+#include <string>
+
+#include <glog/logging.h>
+#include <gtest/gtest.h>
+
+#include <folly/Range.h>
+#include <folly/portability/GFlags.h>
 
 using folly::StringKeyedMap;
 using folly::StringKeyedSetBase;
@@ -176,7 +177,7 @@ TEST(StringKeyedUnorderedMapTest, constructors) {
 
   map2.emplace("key1", 1);
 
-  LeakCheckedUnorderedMap map3(move(map2));
+  LeakCheckedUnorderedMap map3(std::move(map2));
 
   EXPECT_EQ(map3.size(), 1);
   EXPECT_EQ(map3["key1"], 1);
@@ -263,7 +264,7 @@ TEST(StringKeyedSetTest, constructors) {
 
   set2.emplace("key1");
 
-  LeakCheckedSet set3(move(set2));
+  LeakCheckedSet set3(std::move(set2));
 
   EXPECT_EQ(set3.size(), 1);
   EXPECT_EQ(set3.insert("key1").second, false);
@@ -383,7 +384,7 @@ TEST(StringKeyedUnorderedSetTest, constructors) {
 
   set2.emplace("key1");
 
-  LeakCheckedUnorderedSet set3(move(set2));
+  LeakCheckedUnorderedSet set3(std::move(set2));
 
   EXPECT_EQ(set3.size(), 1);
   EXPECT_EQ(set3.insert("key1").second, false);
@@ -470,7 +471,7 @@ TEST(StringKeyedMapTest, constructors) {
 
   map2.emplace("key1", 1);
 
-  LeakCheckedMap map3(move(map2));
+  LeakCheckedMap map3(std::move(map2));
 
   EXPECT_EQ(map3.size(), 1);
   EXPECT_EQ(map3["key1"], 1);

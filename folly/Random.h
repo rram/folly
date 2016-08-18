@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,17 +14,16 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_RANDOM_H_
+#pragma once
 #define FOLLY_RANDOM_H_
 
 #include <type_traits>
 #include <random>
 #include <stdint.h>
-#include <folly/ThreadLocal.h>
+#include <folly/Portability.h>
 
-#if __GNUC_PREREQ(4, 8) && !defined(ANDROID)
+#if FOLLY_HAVE_EXTRANDOM_SFMT19937
 #include <ext/random>
-#define FOLLY_USE_SIMD_PRNG 1
 #endif
 
 namespace folly {
@@ -77,14 +76,14 @@ class ThreadLocalPRNG {
 class Random {
 
  private:
-  template<class RNG>
+  template <class RNG>
   using ValidRNG = typename std::enable_if<
-   std::is_unsigned<typename std::result_of<RNG&()>::type>::value,
-   RNG>::type;
+      std::is_unsigned<typename std::result_of<RNG&()>::type>::value,
+      RNG>::type;
 
  public:
   // Default generator type.
-#if FOLLY_USE_SIMD_PRNG
+#if FOLLY_HAVE_EXTRANDOM_SFMT19937
   typedef __gnu_cxx::sfmt19937 DefaultGenerator;
 #else
   typedef std::mt19937 DefaultGenerator;
@@ -116,8 +115,8 @@ class Random {
    * to create a RNG with a good seed in production, and seed it yourself
    * in test.
    */
-  template <class RNG = DefaultGenerator>
-  static void seed(ValidRNG<RNG>& rng);
+  template <class RNG = DefaultGenerator, class /* EnableIf */ = ValidRNG<RNG>>
+  static void seed(RNG& rng);
 
   /**
    * Create a new RNG, seeded with a good seed.
@@ -127,14 +126,22 @@ class Random {
    * to create a RNG with a good seed in production, and seed it yourself
    * in test.
    */
-  template <class RNG = DefaultGenerator>
-  static ValidRNG<RNG> create();
+  template <class RNG = DefaultGenerator, class /* EnableIf */ = ValidRNG<RNG>>
+  static RNG create();
 
   /**
    * Returns a random uint32_t
    */
-  template<class RNG = ThreadLocalPRNG>
-  static uint32_t rand32(ValidRNG<RNG> rng = RNG()) {
+  static uint32_t rand32() {
+    ThreadLocalPRNG prng;
+    return rand32(prng);
+  }
+
+  /**
+   * Returns a random uint32_t given a specific RNG
+   */
+  template <class RNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static uint32_t rand32(RNG rng) {
     uint32_t r = rng.operator()();
     return r;
   }
@@ -142,8 +149,17 @@ class Random {
   /**
    * Returns a random uint32_t in [0, max). If max == 0, returns 0.
    */
-  template<class RNG = ThreadLocalPRNG>
-  static uint32_t rand32(uint32_t max, ValidRNG<RNG> rng = RNG()) {
+  static uint32_t rand32(uint32_t max) {
+    ThreadLocalPRNG prng;
+    return rand32(max, prng);
+  }
+
+  /**
+   * Returns a random uint32_t in [0, max) given a specific RNG.
+   * If max == 0, returns 0.
+   */
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static uint32_t rand32(uint32_t max, RNG rng = RNG()) {
     if (max == 0) {
       return 0;
     }
@@ -154,10 +170,8 @@ class Random {
   /**
    * Returns a random uint32_t in [min, max). If min == max, returns 0.
    */
-  template<class RNG = ThreadLocalPRNG>
-  static uint32_t rand32(uint32_t min,
-                         uint32_t max,
-                         ValidRNG<RNG> rng = RNG()) {
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static uint32_t rand32(uint32_t min, uint32_t max, RNG rng = RNG()) {
     if (min == max) {
       return 0;
     }
@@ -168,16 +182,16 @@ class Random {
   /**
    * Returns a random uint64_t
    */
-  template<class RNG = ThreadLocalPRNG>
-  static uint64_t rand64(ValidRNG<RNG> rng = RNG()) {
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static uint64_t rand64(RNG rng = RNG()) {
     return ((uint64_t) rng() << 32) | rng();
   }
 
   /**
    * Returns a random uint64_t in [0, max). If max == 0, returns 0.
    */
-  template<class RNG = ThreadLocalPRNG>
-  static uint64_t rand64(uint64_t max, ValidRNG<RNG> rng = RNG()) {
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static uint64_t rand64(uint64_t max, RNG rng = RNG()) {
     if (max == 0) {
       return 0;
     }
@@ -188,10 +202,8 @@ class Random {
   /**
    * Returns a random uint64_t in [min, max). If min == max, returns 0.
    */
-  template<class RNG = ThreadLocalPRNG>
-  static uint64_t rand64(uint64_t min,
-                         uint64_t max,
-                         ValidRNG<RNG> rng = RNG()) {
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static uint64_t rand64(uint64_t min, uint64_t max, RNG rng = RNG()) {
     if (min == max) {
       return 0;
     }
@@ -202,7 +214,7 @@ class Random {
   /**
    * Returns true 1/n of the time. If n == 0, always returns false
    */
-  template<class RNG = ThreadLocalPRNG>
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
   static bool oneIn(uint32_t n, ValidRNG<RNG> rng = RNG()) {
     if (n == 0) {
       return false;
@@ -214,8 +226,8 @@ class Random {
   /**
    * Returns a double in [0, 1)
    */
-  template<class RNG = ThreadLocalPRNG>
-  static double randDouble01(ValidRNG<RNG> rng = RNG()) {
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static double randDouble01(RNG rng = RNG()) {
     return std::generate_canonical<double, std::numeric_limits<double>::digits>
       (rng);
   }
@@ -223,8 +235,8 @@ class Random {
   /**
     * Returns a double in [min, max), if min == max, returns 0.
     */
-  template<class RNG = ThreadLocalPRNG>
-  static double randDouble(double min, double max, ValidRNG<RNG> rng = RNG()) {
+  template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
+  static double randDouble(double min, double max, RNG rng = RNG()) {
     if (std::fabs(max - min) < std::numeric_limits<double>::epsilon()) {
       return 0;
     }
@@ -246,5 +258,3 @@ inline uint32_t randomNumberSeed() {
 }
 
 #include <folly/Random-inl.h>
-
-#endif

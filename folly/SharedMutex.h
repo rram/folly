@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,7 +25,8 @@
 #include <folly/Likely.h>
 #include <folly/detail/CacheLocality.h>
 #include <folly/detail/Futex.h>
-#include <sys/resource.h>
+#include <folly/portability/Asm.h>
+#include <folly/portability/SysResource.h>
 
 // SharedMutex is a reader-writer lock.  It is small, very fast, scalable
 // on multi-core, and suitable for use when readers or writers may block.
@@ -182,7 +183,7 @@
 // the shared slots.  If you can conveniently pass state from lock
 // acquisition to release then the fastest mechanism is to std::move
 // the SharedMutex::ReadHolder instance or an SharedMutex::Token (using
-// lock_shared(Token&) and unlock_sahred(Token&)).  The guard or token
+// lock_shared(Token&) and unlock_shared(Token&)).  The guard or token
 // will tell unlock_shared where in deferredReaders[] to look for the
 // deferred lock.  The Token-less version of unlock_shared() works in all
 // cases, but is optimized for the common (no inter-thread handoff) case.
@@ -237,7 +238,7 @@ class SharedMutexImpl {
   class UpgradeHolder;
   class WriteHolder;
 
-  SharedMutexImpl() : state_(0) {}
+  constexpr SharedMutexImpl() : state_(0) {}
 
   SharedMutexImpl(const SharedMutexImpl&) = delete;
   SharedMutexImpl(SharedMutexImpl&&) = delete;
@@ -496,7 +497,9 @@ class SharedMutexImpl {
     bool canTimeOut() { return true; }
     bool shouldTimeOut() { return true; }
 
-    bool doWait(Futex& futex, uint32_t expected, uint32_t waitMask) {
+    bool doWait(Futex& /* futex */,
+                uint32_t /* expected */,
+                uint32_t /* waitMask */) {
       return false;
     }
   };
@@ -1064,121 +1067,7 @@ class SharedMutexImpl {
   }
 
   template <class WaitContext>
-  bool lockSharedImpl(uint32_t& state, Token* token, WaitContext& ctx) {
-    while (true) {
-      if (UNLIKELY((state & kHasE) != 0) &&
-          !waitForZeroBits(state, kHasE, kWaitingS, ctx) && ctx.canTimeOut()) {
-        return false;
-      }
-
-      uint32_t slot;
-      uintptr_t slotValue = 1; // any non-zero value will do
-
-      bool canAlreadyDefer = (state & kMayDefer) != 0;
-      bool aboveDeferThreshold =
-          (state & kHasS) >= (kNumSharedToStartDeferring - 1) * kIncrHasS;
-      bool drainInProgress = ReaderPriority && (state & kBegunE) != 0;
-      if (canAlreadyDefer || (aboveDeferThreshold && !drainInProgress)) {
-        // starting point for our empty-slot search, can change after
-        // calling waitForZeroBits
-        uint32_t bestSlot =
-            (uint32_t)folly::detail::AccessSpreader<Atom>::current(
-                kMaxDeferredReaders);
-
-        // deferred readers are already enabled, or it is time to
-        // enable them if we can find a slot
-        for (uint32_t i = 0; i < kDeferredSearchDistance; ++i) {
-          slot = bestSlot ^ i;
-          assert(slot < kMaxDeferredReaders);
-          slotValue = deferredReader(slot)->load(std::memory_order_relaxed);
-          if (slotValue == 0) {
-            // found empty slot
-            break;
-          }
-        }
-      }
-
-      if (slotValue != 0) {
-        // not yet deferred, or no empty slots
-        if (state_.compare_exchange_strong(state, state + kIncrHasS)) {
-          // successfully recorded the read lock inline
-          if (token != nullptr) {
-            token->type_ = Token::Type::INLINE_SHARED;
-          }
-          return true;
-        }
-        // state is updated, try again
-        continue;
-      }
-
-      // record that deferred readers might be in use if necessary
-      if ((state & kMayDefer) == 0) {
-        if (!state_.compare_exchange_strong(state, state | kMayDefer)) {
-          // keep going if CAS failed because somebody else set the bit
-          // for us
-          if ((state & (kHasE | kMayDefer)) != kMayDefer) {
-            continue;
-          }
-        }
-        // state = state | kMayDefer;
-      }
-
-      // try to use the slot
-      bool gotSlot = deferredReader(slot)->compare_exchange_strong(
-          slotValue,
-          token == nullptr ? tokenlessSlotValue() : tokenfulSlotValue());
-
-      // If we got the slot, we need to verify that an exclusive lock
-      // didn't happen since we last checked.  If we didn't get the slot we
-      // need to recheck state_ anyway to make sure we don't waste too much
-      // work.  It is also possible that since we checked state_ someone
-      // has acquired and released the write lock, clearing kMayDefer.
-      // Both cases are covered by looking for the readers-possible bit,
-      // because it is off when the exclusive lock bit is set.
-      state = state_.load(std::memory_order_acquire);
-
-      if (!gotSlot) {
-        continue;
-      }
-
-      if (token == nullptr) {
-        tls_lastTokenlessSlot = slot;
-      }
-
-      if ((state & kMayDefer) != 0) {
-        assert((state & kHasE) == 0);
-        // success
-        if (token != nullptr) {
-          token->type_ = Token::Type::DEFERRED_SHARED;
-          token->slot_ = (uint16_t)slot;
-        }
-        return true;
-      }
-
-      // release the slot before retrying
-      if (token == nullptr) {
-        // We can't rely on slot.  Token-less slot values can be freed by
-        // any unlock_shared(), so we need to do the full deferredReader
-        // search during unlock.  Unlike unlock_shared(), we can't trust
-        // kPrevDefer here.  This deferred lock isn't visible to lock()
-        // (that's the whole reason we're undoing it) so there might have
-        // subsequently been an unlock() and lock() with no intervening
-        // transition to deferred mode.
-        if (!tryUnlockTokenlessSharedDeferred()) {
-          unlockSharedInline();
-        }
-      } else {
-        if (!tryUnlockSharedDeferred(slot)) {
-          unlockSharedInline();
-        }
-      }
-
-      // We got here not because the lock was unavailable, but because
-      // we lost a compare-and-swap.  Try-lock is typically allowed to
-      // have spurious failures, but there is no lock efficiency gain
-      // from exploiting that freedom here.
-    }
-  }
+  bool lockSharedImpl(uint32_t& state, Token* token, WaitContext& ctx);
 
   // Updates the state in/out argument as if the locks were made inline,
   // but does not update state_
@@ -1196,19 +1085,7 @@ class SharedMutexImpl {
     }
   }
 
-  bool tryUnlockTokenlessSharedDeferred() {
-    auto bestSlot = tls_lastTokenlessSlot;
-    for (uint32_t i = 0; i < kMaxDeferredReaders; ++i) {
-      auto slotPtr = deferredReader(bestSlot ^ i);
-      auto slotValue = slotPtr->load(std::memory_order_relaxed);
-      if (slotValue == tokenlessSlotValue() &&
-          slotPtr->compare_exchange_strong(slotValue, 0)) {
-        tls_lastTokenlessSlot = bestSlot ^ i;
-        return true;
-      }
-    }
-    return false;
-  }
+  bool tryUnlockTokenlessSharedDeferred();
 
   bool tryUnlockSharedDeferred(uint32_t slot) {
     assert(slot < kMaxDeferredReaders);
@@ -1280,8 +1157,13 @@ class SharedMutexImpl {
     ReadHolder& operator=(const ReadHolder& rhs) = delete;
 
     ~ReadHolder() {
+      unlock();
+    }
+
+    void unlock() {
       if (lock_) {
         lock_->unlock_shared(token_);
+        lock_ = nullptr;
       }
     }
 
@@ -1322,8 +1204,13 @@ class SharedMutexImpl {
     UpgradeHolder& operator=(const UpgradeHolder& rhs) = delete;
 
     ~UpgradeHolder() {
+      unlock();
+    }
+
+    void unlock() {
       if (lock_) {
         lock_->unlock_upgrade();
+        lock_ = nullptr;
       }
     }
 
@@ -1350,6 +1237,30 @@ class SharedMutexImpl {
       lock_->unlock_upgrade_and_lock();
     }
 
+    // README:
+    //
+    // It is intended that WriteHolder(ReadHolder&& rhs) do not exist.
+    //
+    // Shared locks (read) can not safely upgrade to unique locks (write).
+    // That upgrade path is a well-known recipe for deadlock, so we explicitly
+    // disallow it.
+    //
+    // If you need to do a conditional mutation, you have a few options:
+    // 1. Check the condition under a shared lock and release it.
+    //    Then maybe check the condition again under a unique lock and maybe do
+    //    the mutation.
+    // 2. Check the condition once under an upgradeable lock.
+    //    Then maybe upgrade the lock to a unique lock and do the mutation.
+    // 3. Check the condition and maybe perform the mutation under a unique
+    //    lock.
+    //
+    // Relevant upgradeable lock notes:
+    // * At most one upgradeable lock can be held at a time for a given shared
+    //   mutex, just like a unique lock.
+    // * An upgradeable lock may be held concurrently with any number of shared
+    //   locks.
+    // * An upgradeable lock may be upgraded atomically to a unique lock.
+
     WriteHolder(WriteHolder&& rhs) noexcept : lock_(rhs.lock_) {
       rhs.lock_ = nullptr;
     }
@@ -1363,8 +1274,13 @@ class SharedMutexImpl {
     WriteHolder& operator=(const WriteHolder& rhs) = delete;
 
     ~WriteHolder() {
+      unlock();
+    }
+
+    void unlock() {
       if (lock_) {
         lock_->unlock();
+        lock_ = nullptr;
       }
     }
 
@@ -1379,18 +1295,184 @@ class SharedMutexImpl {
   friend void acquireReadWrite(SharedMutexImpl& lock) { lock.lock(); }
   friend void releaseRead(SharedMutexImpl& lock) { lock.unlock_shared(); }
   friend void releaseReadWrite(SharedMutexImpl& lock) { lock.unlock(); }
+  friend bool acquireRead(SharedMutexImpl& lock, unsigned int ms) {
+    return lock.try_lock_shared_for(std::chrono::milliseconds(ms));
+  }
+  friend bool acquireReadWrite(SharedMutexImpl& lock, unsigned int ms) {
+    return lock.try_lock_for(std::chrono::milliseconds(ms));
+  }
 };
-
-#define COMMON_CONCURRENCY_SHARED_MUTEX_DECLARE_STATIC_STORAGE(type) \
-  template <>                                                        \
-  type::DeferredReaderSlot                                           \
-      type::deferredReaders[type::kMaxDeferredReaders *              \
-                            type::kDeferredSeparationFactor] = {};   \
-  template <>                                                        \
-  FOLLY_TLS uint32_t type::tls_lastTokenlessSlot = 0;
 
 typedef SharedMutexImpl<true> SharedMutexReadPriority;
 typedef SharedMutexImpl<false> SharedMutexWritePriority;
 typedef SharedMutexWritePriority SharedMutex;
+
+// Prevent the compiler from instantiating these in other translation units.
+// They are instantiated once in SharedMutex.cpp
+extern template class SharedMutexImpl<true>;
+extern template class SharedMutexImpl<false>;
+
+template <
+    bool ReaderPriority,
+    typename Tag_,
+    template <typename> class Atom,
+    bool BlockImmediately>
+typename SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
+    DeferredReaderSlot
+        SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
+            deferredReaders[kMaxDeferredReaders * kDeferredSeparationFactor] =
+                {};
+
+template <
+    bool ReaderPriority,
+    typename Tag_,
+    template <typename> class Atom,
+    bool BlockImmediately>
+FOLLY_TLS uint32_t
+    SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
+        tls_lastTokenlessSlot = 0;
+
+template <
+    bool ReaderPriority,
+    typename Tag_,
+    template <typename> class Atom,
+    bool BlockImmediately>
+bool SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
+    tryUnlockTokenlessSharedDeferred() {
+  auto bestSlot = tls_lastTokenlessSlot;
+  for (uint32_t i = 0; i < kMaxDeferredReaders; ++i) {
+    auto slotPtr = deferredReader(bestSlot ^ i);
+    auto slotValue = slotPtr->load(std::memory_order_relaxed);
+    if (slotValue == tokenlessSlotValue() &&
+        slotPtr->compare_exchange_strong(slotValue, 0)) {
+      tls_lastTokenlessSlot = bestSlot ^ i;
+      return true;
+    }
+  }
+  return false;
+}
+
+template <
+    bool ReaderPriority,
+    typename Tag_,
+    template <typename> class Atom,
+    bool BlockImmediately>
+template <class WaitContext>
+bool SharedMutexImpl<ReaderPriority, Tag_, Atom, BlockImmediately>::
+    lockSharedImpl(uint32_t& state, Token* token, WaitContext& ctx) {
+  while (true) {
+    if (UNLIKELY((state & kHasE) != 0) &&
+        !waitForZeroBits(state, kHasE, kWaitingS, ctx) && ctx.canTimeOut()) {
+      return false;
+    }
+
+    uint32_t slot;
+    uintptr_t slotValue = 1; // any non-zero value will do
+
+    bool canAlreadyDefer = (state & kMayDefer) != 0;
+    bool aboveDeferThreshold =
+        (state & kHasS) >= (kNumSharedToStartDeferring - 1) * kIncrHasS;
+    bool drainInProgress = ReaderPriority && (state & kBegunE) != 0;
+    if (canAlreadyDefer || (aboveDeferThreshold && !drainInProgress)) {
+      // starting point for our empty-slot search, can change after
+      // calling waitForZeroBits
+      uint32_t bestSlot =
+          (uint32_t)folly::detail::AccessSpreader<Atom>::current(
+              kMaxDeferredReaders);
+
+      // deferred readers are already enabled, or it is time to
+      // enable them if we can find a slot
+      for (uint32_t i = 0; i < kDeferredSearchDistance; ++i) {
+        slot = bestSlot ^ i;
+        assert(slot < kMaxDeferredReaders);
+        slotValue = deferredReader(slot)->load(std::memory_order_relaxed);
+        if (slotValue == 0) {
+          // found empty slot
+          break;
+        }
+      }
+    }
+
+    if (slotValue != 0) {
+      // not yet deferred, or no empty slots
+      if (state_.compare_exchange_strong(state, state + kIncrHasS)) {
+        // successfully recorded the read lock inline
+        if (token != nullptr) {
+          token->type_ = Token::Type::INLINE_SHARED;
+        }
+        return true;
+      }
+      // state is updated, try again
+      continue;
+    }
+
+    // record that deferred readers might be in use if necessary
+    if ((state & kMayDefer) == 0) {
+      if (!state_.compare_exchange_strong(state, state | kMayDefer)) {
+        // keep going if CAS failed because somebody else set the bit
+        // for us
+        if ((state & (kHasE | kMayDefer)) != kMayDefer) {
+          continue;
+        }
+      }
+      // state = state | kMayDefer;
+    }
+
+    // try to use the slot
+    bool gotSlot = deferredReader(slot)->compare_exchange_strong(
+        slotValue,
+        token == nullptr ? tokenlessSlotValue() : tokenfulSlotValue());
+
+    // If we got the slot, we need to verify that an exclusive lock
+    // didn't happen since we last checked.  If we didn't get the slot we
+    // need to recheck state_ anyway to make sure we don't waste too much
+    // work.  It is also possible that since we checked state_ someone
+    // has acquired and released the write lock, clearing kMayDefer.
+    // Both cases are covered by looking for the readers-possible bit,
+    // because it is off when the exclusive lock bit is set.
+    state = state_.load(std::memory_order_acquire);
+
+    if (!gotSlot) {
+      continue;
+    }
+
+    if (token == nullptr) {
+      tls_lastTokenlessSlot = slot;
+    }
+
+    if ((state & kMayDefer) != 0) {
+      assert((state & kHasE) == 0);
+      // success
+      if (token != nullptr) {
+        token->type_ = Token::Type::DEFERRED_SHARED;
+        token->slot_ = (uint16_t)slot;
+      }
+      return true;
+    }
+
+    // release the slot before retrying
+    if (token == nullptr) {
+      // We can't rely on slot.  Token-less slot values can be freed by
+      // any unlock_shared(), so we need to do the full deferredReader
+      // search during unlock.  Unlike unlock_shared(), we can't trust
+      // kPrevDefer here.  This deferred lock isn't visible to lock()
+      // (that's the whole reason we're undoing it) so there might have
+      // subsequently been an unlock() and lock() with no intervening
+      // transition to deferred mode.
+      if (!tryUnlockTokenlessSharedDeferred()) {
+        unlockSharedInline();
+      }
+    } else {
+      if (!tryUnlockSharedDeferred(slot)) {
+        unlockSharedInline();
+      }
+    }
+
+    // We got here not because the lock was unavailable, but because
+    // we lost a compare-and-swap.  Try-lock is typically allowed to
+    // have spurious failures, but there is no lock efficiency gain
+    // from exploiting that freedom here.
+  }
+}
 
 } // namespace folly

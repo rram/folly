@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,14 +34,14 @@
  * @author Spencer Ahrens (sahrens)
  */
 
-#ifndef FOLLY_THREADLOCAL_H_
-#define FOLLY_THREADLOCAL_H_
+#pragma once
 
-#include <folly/Portability.h>
-#include <boost/iterator/iterator_facade.hpp>
 #include <folly/Likely.h>
+#include <folly/Portability.h>
+#include <folly/ScopeGuard.h>
+#include <boost/iterator/iterator_facade.hpp>
 #include <type_traits>
-
+#include <utility>
 
 namespace folly {
 enum class TLPDestructionMode {
@@ -59,7 +59,13 @@ template<class T, class Tag> class ThreadLocalPtr;
 template<class T, class Tag=void>
 class ThreadLocal {
  public:
-  ThreadLocal() = default;
+  constexpr ThreadLocal() : constructor_([]() {
+      return new T();
+    }) {}
+
+  explicit ThreadLocal(std::function<T*()> constructor) :
+      constructor_(constructor) {
+  }
 
   T* get() const {
     T* ptr = tlp_.get();
@@ -98,12 +104,13 @@ class ThreadLocal {
   ThreadLocal& operator=(const ThreadLocal&) = delete;
 
   T* makeTlp() const {
-    T* ptr = new T();
+    auto ptr = constructor_();
     tlp_.reset(ptr);
     return ptr;
   }
 
   mutable ThreadLocalPtr<T,Tag> tlp_;
+  std::function<T*()> constructor_;
 };
 
 /*
@@ -134,18 +141,19 @@ class ThreadLocal {
 
 template<class T, class Tag=void>
 class ThreadLocalPtr {
+ private:
+  typedef threadlocal_detail::StaticMeta<Tag> StaticMeta;
  public:
-  ThreadLocalPtr() : id_(threadlocal_detail::StaticMeta<Tag>::create()) { }
+  constexpr ThreadLocalPtr() : id_() {}
 
-  ThreadLocalPtr(ThreadLocalPtr&& other) noexcept : id_(other.id_) {
-    other.id_ = 0;
+  ThreadLocalPtr(ThreadLocalPtr&& other) noexcept :
+    id_(std::move(other.id_)) {
   }
 
   ThreadLocalPtr& operator=(ThreadLocalPtr&& other) {
     assert(this != &other);
     destroy();
-    id_ = other.id_;
-    other.id_ = 0;
+    id_ = std::move(other.id_);
     return *this;
   }
 
@@ -154,7 +162,8 @@ class ThreadLocalPtr {
   }
 
   T* get() const {
-    return static_cast<T*>(threadlocal_detail::StaticMeta<Tag>::get(id_).ptr);
+    threadlocal_detail::ElementWrapper& w = StaticMeta::instance().get(&id_);
+    return static_cast<T*>(w.ptr);
   }
 
   T* operator->() const {
@@ -166,19 +175,18 @@ class ThreadLocalPtr {
   }
 
   T* release() {
-    threadlocal_detail::ElementWrapper& w =
-      threadlocal_detail::StaticMeta<Tag>::get(id_);
+    threadlocal_detail::ElementWrapper& w = StaticMeta::instance().get(&id_);
 
     return static_cast<T*>(w.release());
   }
 
   void reset(T* newPtr = nullptr) {
-    threadlocal_detail::ElementWrapper& w =
-      threadlocal_detail::StaticMeta<Tag>::get(id_);
-    if (w.ptr != newPtr) {
-      w.dispose(TLPDestructionMode::THIS_THREAD);
-      w.set(newPtr);
-    }
+    auto guard = makeGuard([&] { delete newPtr; });
+    threadlocal_detail::ElementWrapper& w = StaticMeta::instance().get(&id_);
+
+    w.dispose(TLPDestructionMode::THIS_THREAD);
+    guard.dismiss();
+    w.set(newPtr);
   }
 
   explicit operator bool() const {
@@ -186,20 +194,52 @@ class ThreadLocalPtr {
   }
 
   /**
+   * reset() that transfers ownership from a smart pointer
+   */
+  template <
+      typename SourceT,
+      typename Deleter,
+      typename = typename std::enable_if<
+          std::is_convertible<SourceT*, T*>::value>::type>
+  void reset(std::unique_ptr<SourceT, Deleter> source) {
+    auto deleter = [delegate = source.get_deleter()](
+        T * ptr, TLPDestructionMode) {
+      delegate(ptr);
+    };
+    reset(source.release(), deleter);
+  }
+
+  /**
+   * reset() that transfers ownership from a smart pointer with the default
+   * deleter
+   */
+  template <
+      typename SourceT,
+      typename = typename std::enable_if<
+          std::is_convertible<SourceT*, T*>::value>::type>
+  void reset(std::unique_ptr<SourceT> source) {
+    reset(source.release());
+  }
+
+  /**
    * reset() with a custom deleter:
    * deleter(T* ptr, TLPDestructionMode mode)
    * "mode" is ALL_THREADS if we're destructing this ThreadLocalPtr (and thus
    * deleting pointers for all threads), and THIS_THREAD if we're only deleting
-   * the member for one thread (because of thread exit or reset())
+   * the member for one thread (because of thread exit or reset()).
+   * Invoking the deleter must not throw.
    */
   template <class Deleter>
-  void reset(T* newPtr, Deleter deleter) {
-    threadlocal_detail::ElementWrapper& w =
-      threadlocal_detail::StaticMeta<Tag>::get(id_);
-    if (w.ptr != newPtr) {
-      w.dispose(TLPDestructionMode::THIS_THREAD);
-      w.set(newPtr, deleter);
-    }
+  void reset(T* newPtr, const Deleter& deleter) {
+    auto guard = makeGuard([&] {
+      if (newPtr) {
+        deleter(newPtr, TLPDestructionMode::THIS_THREAD);
+      }
+    });
+    threadlocal_detail::ElementWrapper& w = StaticMeta::instance().get(&id_);
+    w.dispose(TLPDestructionMode::THIS_THREAD);
+    guard.dismiss();
+    w.set(newPtr, deleter);
   }
 
   // Holds a global lock for iteration through all thread local child objects.
@@ -208,7 +248,7 @@ class ThreadLocalPtr {
   class Accessor {
     friend class ThreadLocalPtr<T,Tag>;
 
-    threadlocal_detail::StaticMeta<Tag>& meta_;
+    threadlocal_detail::StaticMetaBase& meta_;
     std::mutex* lock_;
     uint32_t id_;
 
@@ -223,7 +263,7 @@ class ThreadLocalPtr {
           boost::bidirectional_traversal_tag> {   // traversal
       friend class Accessor;
       friend class boost::iterator_core_access;
-      const Accessor* const accessor_;
+      const Accessor* accessor_;
       threadlocal_detail::ThreadEntry* e_;
 
       void increment() {
@@ -330,23 +370,19 @@ class ThreadLocalPtr {
   Accessor accessAllThreads() const {
     static_assert(!std::is_same<Tag, void>::value,
                   "Must use a unique Tag to use the accessAllThreads feature");
-    return Accessor(id_);
+    return Accessor(id_.getOrAllocate(StaticMeta::instance()));
   }
 
  private:
   void destroy() {
-    if (id_) {
-      threadlocal_detail::StaticMeta<Tag>::destroy(id_);
-    }
+    StaticMeta::instance().destroy(&id_);
   }
 
   // non-copyable
   ThreadLocalPtr(const ThreadLocalPtr&) = delete;
   ThreadLocalPtr& operator=(const ThreadLocalPtr&) = delete;
 
-  uint32_t id_;  // every instantiation has a unique id
+  mutable typename StaticMeta::EntryID id_;
 };
 
 }  // namespace folly
-
-#endif /* FOLLY_THREADLOCAL_H_ */

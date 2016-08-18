@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@
 // Copyright 2013-present Facebook. All Rights Reserved.
 // @author: Pavlo Kushnir (pavlo)
 
-#ifndef FOLLY_EXPERIMENTAL_STRINGKEYEDUNORDEREDSET_H_
-#define FOLLY_EXPERIMENTAL_STRINGKEYEDUNORDEREDSET_H_
+#pragma once
 
 #include <initializer_list>
 #include <memory>
@@ -113,8 +112,8 @@ public:
   }
 
   BasicStringKeyedUnorderedSet(BasicStringKeyedUnorderedSet&& rhs,
-                               const allocator_type& a) noexcept
-      : Base(std::move(rhs)/* , a */ /* not supported by gcc */) {
+                               const allocator_type& /* a */) noexcept
+      : Base(std::move(rhs) /* , a */ /* not supported by gcc */) {
     assert(rhs.empty());
   }
 
@@ -221,5 +220,3 @@ public:
 typedef BasicStringKeyedUnorderedSet<> StringKeyedUnorderedSet;
 
 } // folly
-
-#endif /* FOLLY_EXPERIMENTAL_STRINGKEYEDUNORDEREDSET_H_ */

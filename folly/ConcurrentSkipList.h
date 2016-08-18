@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -117,8 +117,7 @@ Sample usage:
      }
 */
 
-#ifndef FOLLY_CONCURRENT_SKIP_LIST_H_
-#define FOLLY_CONCURRENT_SKIP_LIST_H_
+#pragma once
 
 #include <algorithm>
 #include <atomic>
@@ -161,20 +160,33 @@ class ConcurrentSkipList {
   class Accessor;
   class Skipper;
 
-  explicit ConcurrentSkipList(int height, const NodeAlloc& alloc = NodeAlloc())
-    : recycler_(alloc),
-      head_(NodeType::create(recycler_.alloc(), height, value_type(), true)),
-      size_(0) { }
+  explicit ConcurrentSkipList(int height, const NodeAlloc& alloc)
+      : recycler_(alloc),
+        head_(NodeType::create(recycler_.alloc(), height, value_type(), true)),
+        size_(0) {}
+
+  explicit ConcurrentSkipList(int height)
+      : recycler_(),
+        head_(NodeType::create(recycler_.alloc(), height, value_type(), true)),
+        size_(0) {}
 
   // Convenient function to get an Accessor to a new instance.
-  static Accessor create(int height = 1, const NodeAlloc& alloc = NodeAlloc()) {
+  static Accessor create(int height, const NodeAlloc& alloc) {
     return Accessor(createInstance(height, alloc));
   }
 
+  static Accessor create(int height = 1) {
+    return Accessor(createInstance(height));
+  }
+
   // Create a shared_ptr skiplist object with initial head height.
-  static std::shared_ptr<SkipListType> createInstance(
-      int height = 1, const NodeAlloc& alloc = NodeAlloc()) {
+  static std::shared_ptr<SkipListType> createInstance(int height,
+                                                      const NodeAlloc& alloc) {
     return std::make_shared<ConcurrentSkipList>(height, alloc);
+  }
+
+  static std::shared_ptr<SkipListType> createInstance(int height = 1) {
+    return std::make_shared<ConcurrentSkipList>(height);
   }
 
   //===================================================================
@@ -787,5 +799,3 @@ class ConcurrentSkipList<T, Comp, NodeAlloc, MAX_HEIGHT>::Skipper {
 };
 
 } // namespace folly
-
-#endif  // FOLLY_CONCURRENT_SKIP_LIST_H_

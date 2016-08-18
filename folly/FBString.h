@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,7 @@
 // @author: Andrei Alexandrescu (aalexandre)
 // String type.
 
-#ifndef FOLLY_BASE_FBSTRING_H_
-#define FOLLY_BASE_FBSTRING_H_
+#pragma once
 
 #include <atomic>
 #include <limits>
@@ -31,6 +30,12 @@
 #ifdef _LIBSTDCXX_FBSTRING
 
 #pragma GCC system_header
+
+// When used as std::string replacement always disable assertions.
+#ifndef NDEBUG
+#define NDEBUG
+#define FOLLY_DEFINED_NDEBUG_FOR_FBSTRING
+#endif // NDEBUG
 
 // Handle the cases where the fbcode version (folly/Malloc.h) is included
 // either before or after this inclusion.
@@ -80,9 +85,13 @@
 #define FBSTRING_UNLIKELY(x) (x)
 #endif
 
-// Ignore shadowing warnings within this file, so includers can use -Wshadow.
 #pragma GCC diagnostic push
+// Ignore shadowing warnings within this file, so includers can use -Wshadow.
 #pragma GCC diagnostic ignored "-Wshadow"
+// GCC 4.9 has a false positive in setSmallSize (probably
+// https://gcc.gnu.org/bugzilla/show_bug.cgi?id=59124), disable
+// compile-time array bound checking.
+#pragma GCC diagnostic ignored "-Warray-bounds"
 
 // FBString cannot use throw when replacing std::string, though it may still
 // use std::__throw_*
@@ -96,28 +105,26 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 namespace folly {
 #endif
 
-// Different versions of gcc/clang support different versions of
-// the address sanitizer attribute.  Unfortunately, this attribute
-// has issues when inlining is used, so disable that as well.
 #if defined(__clang__)
 # if __has_feature(address_sanitizer)
-#  if __has_attribute(__no_address_safety_analysis__)
-#   define FBSTRING_DISABLE_ADDRESS_SANITIZER \
-      __attribute__((__no_address_safety_analysis__, __noinline__))
-#  elif __has_attribute(__no_sanitize_address__)
-#   define FBSTRING_DISABLE_ADDRESS_SANITIZER \
-      __attribute__((__no_sanitize_address__, __noinline__))
-#  endif
+#  define FBSTRING_SANITIZE_ADDRESS
 # endif
 #elif defined (__GNUC__) && \
-      (__GNUC__ == 4) && \
-      (__GNUC_MINOR__ >= 8) && \
+      (((__GNUC__ == 4) && (__GNUC_MINOR__ >= 8)) || (__GNUC__ >= 5)) && \
       __SANITIZE_ADDRESS__
-# define FBSTRING_DISABLE_ADDRESS_SANITIZER \
-    __attribute__((__no_address_safety_analysis__, __noinline__))
+# define FBSTRING_SANITIZE_ADDRESS
 #endif
-#ifndef FBSTRING_DISABLE_ADDRESS_SANITIZER
-# define FBSTRING_DISABLE_ADDRESS_SANITIZER
+
+// When compiling with ASan, always heap-allocate the string even if
+// it would fit in-situ, so that ASan can detect access to the string
+// buffer after it has been invalidated (destroyed, resized, etc.).
+// Note that this flag doesn't remove support for in-situ strings, as
+// that would break ABI-compatibility and wouldn't allow linking code
+// compiled with this flag with code compiled without.
+#ifdef FBSTRING_SANITIZE_ADDRESS
+# define FBSTRING_DISABLE_SSO true
+#else
+# define FBSTRING_DISABLE_SSO false
 #endif
 
 namespace fbstring_detail {
@@ -228,10 +235,14 @@ public:
   void shrink(size_t delta);
   // Expands the string by delta characters (i.e. after this call
   // size() will report the old size() plus delta) but without
-  // initializing the expanded region. Returns a pointer to the memory
-  // to be initialized (the beginning of the expanded portion). The
-  // caller is expected to fill the expanded area appropriately.
-  Char* expand_noinit(size_t delta);
+  // initializing the expanded region. The expanded region is
+  // zero-terminated. Returns a pointer to the memory to be
+  // initialized (the beginning of the expanded portion). The caller
+  // is expected to fill the expanded area appropriately.
+  // If expGrowth is true, exponential growth is guaranteed.
+  // It is not guaranteed not to reallocate even if size() + delta <
+  // capacity(), so all references to the buffer are invalidated.
+  Char* expand_noinit(size_t delta, bool expGrowth);
   // Expands the string by one character and sets the last character
   // to c.
   void push_back(Char c);
@@ -256,18 +267,9 @@ private:
 */
 
 /**
- * gcc-4.7 throws what appears to be some false positive uninitialized
- * warnings for the members of the MediumLarge struct.  So, mute them here.
- */
-#if defined(__GNUC__) && !defined(__clang__)
-# pragma GCC diagnostic push
-# pragma GCC diagnostic ignored "-Wuninitialized"
-#endif
-
-/**
  * This is the core of the string. The code should work on 32- and
- * 64-bit architectures and with any Char size. Porting to big endian
- * architectures would require some changes.
+ * 64-bit and both big- and little-endianan architectures with any
+ * Char size.
  *
  * The storage is selected as follows (assuming we store one-byte
  * characters on a 64-bit machine): (a) "small" strings between 0 and
@@ -279,23 +281,32 @@ private:
  * reference-counted and copied lazily. the reference count is
  * allocated right before the character array.
  *
- * The discriminator between these three strategies sits in the two
- * most significant bits of the rightmost char of the storage. If
- * neither is set, then the string is small (and its length sits in
- * the lower-order bits of that rightmost character). If the MSb is
- * set, the string is medium width. If the second MSb is set, then the
- * string is large.
+ * The discriminator between these three strategies sits in two
+ * bits of the rightmost char of the storage. If neither is set, then the
+ * string is small (and its length sits in the lower-order bits on
+ * little-endian or the high-order bits on big-endian of that
+ * rightmost character). If the MSb is set, the string is medium width.
+ * If the second MSb is set, then the string is large. On little-endian,
+ * these 2 bits are the 2 MSbs of MediumLarge::capacity_, while on
+ * big-endian, these 2 bits are the 2 LSbs. This keeps both little-endian
+ * and big-endian fbstring_core equivalent with merely different ops used
+ * to extract capacity/category.
  */
 template <class Char> class fbstring_core {
+protected:
+// It's MSVC, so we just have to guess ... and allow an override
+#ifdef _MSC_VER
+# ifdef FOLLY_ENDIAN_BE
+  static constexpr auto kIsLittleEndian = false;
+# else
+  static constexpr auto kIsLittleEndian = true;
+# endif
+#else
+  static constexpr auto kIsLittleEndian =
+      __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;
+#endif
 public:
-  fbstring_core() noexcept {
-    // Only initialize the tag, will set the MSBs (i.e. the small
-    // string size) to zero too
-    ml_.capacity_ = maxSmallSize << (8 * (sizeof(size_t) - sizeof(Char)));
-    // or: setSmallSize(0);
-    writeTerminator();
-    assert(category() == Category::isSmall && size() == 0);
-  }
+  fbstring_core() noexcept { reset(); }
 
   fbstring_core(const fbstring_core & rhs) {
     assert(&rhs != this);
@@ -307,18 +318,12 @@ public:
           "fbstring layout failure");
       static_assert(offsetof(MediumLarge, capacity_) == 2 * sizeof(ml_.data_),
           "fbstring layout failure");
-      const size_t size = rhs.smallSize();
-      if (size == 0) {
-        ml_.capacity_ = rhs.ml_.capacity_;
-        writeTerminator();
-      } else {
-        // Just write the whole thing, don't look at details. In
-        // particular we need to copy capacity anyway because we want
-        // to set the size (don't forget that the last character,
-        // which stores a short string's length, is shared with the
-        // ml_.capacity field).
-        ml_ = rhs.ml_;
-      }
+      // Just write the whole thing, don't look at details. In
+      // particular we need to copy capacity anyway because we want
+      // to set the size (don't forget that the last character,
+      // which stores a short string's length, is shared with the
+      // ml_.capacity field).
+      ml_ = rhs.ml_;
       assert(category() == Category::isSmall && this->size() == rhs.size());
     } else if (rhs.category() == Category::isLarge) {
       // Large strings are just refcounted
@@ -331,15 +336,12 @@ public:
       auto const allocSize =
            goodMallocSize((1 + rhs.ml_.size_) * sizeof(Char));
       ml_.data_ = static_cast<Char*>(checkedMalloc(allocSize));
+      // Also copies terminator.
       fbstring_detail::pod_copy(rhs.ml_.data_,
-                                // 1 for terminator
                                 rhs.ml_.data_ + rhs.ml_.size_ + 1,
                                 ml_.data_);
-      // No need for writeTerminator() here, we copied one extra
-      // element just above.
       ml_.size_ = rhs.ml_.size_;
-      ml_.capacity_ = (allocSize / sizeof(Char) - 1)
-                      | static_cast<category_type>(Category::isMedium);
+      ml_.setCapacity(allocSize / sizeof(Char) - 1, Category::isMedium);
       assert(category() == Category::isMedium);
     }
     assert(size() == rhs.size());
@@ -347,33 +349,26 @@ public:
   }
 
   fbstring_core(fbstring_core&& goner) noexcept {
-    if (goner.category() == Category::isSmall) {
-      // Just copy, leave the goner in peace
-      new(this) fbstring_core(goner.small_, goner.smallSize());
-    } else {
-      // Take goner's guts
-      ml_ = goner.ml_;
-      // Clean goner's carcass
-      goner.setSmallSize(0);
-    }
+    // Take goner's guts
+    ml_ = goner.ml_;
+    // Clean goner's carcass
+    goner.reset();
   }
 
-  // NOTE(agallagher): The word-aligned copy path copies bytes which are
-  // outside the range of the string, and makes address sanitizer unhappy,
-  // so just disable it on this function.
-  fbstring_core(const Char *const data, const size_t size)
-      FBSTRING_DISABLE_ADDRESS_SANITIZER {
+  fbstring_core(const Char *const data,
+                const size_t size,
+                bool disableSSO = FBSTRING_DISABLE_SSO) {
 #ifndef NDEBUG
 #ifndef _LIBSTDCXX_FBSTRING
     SCOPE_EXIT {
       assert(this->size() == size);
-      assert(memcmp(this->data(), data, size * sizeof(Char)) == 0);
+      assert(size == 0 || memcmp(this->data(), data, size * sizeof(Char)) == 0);
     };
 #endif
 #endif
 
     // Simplest case first: small strings are bitblitted
-    if (size <= maxSmallSize) {
+    if (!disableSSO && size <= maxSmallSize) {
       // Layout is: Char* data_, size_t size_, size_t capacity_
       static_assert(sizeof(*this) == sizeof(Char*) + 2 * sizeof(size_t),
           "fbstring has unexpected size");
@@ -385,47 +380,50 @@ public:
 
       // If data is aligned, use fast word-wise copying. Otherwise,
       // use conservative memcpy.
-      if (reinterpret_cast<size_t>(data) & (sizeof(size_t) - 1)) {
-        fbstring_detail::pod_copy(data, data + size, small_);
-      } else {
-        // Copy one word (64 bits) at a time
+      // The word-wise path reads bytes which are outside the range of
+      // the string, and makes ASan unhappy, so we disable it when
+      // compiling with ASan.
+#ifndef FBSTRING_SANITIZE_ADDRESS
+      if ((reinterpret_cast<size_t>(data) & (sizeof(size_t) - 1)) == 0) {
         const size_t byteSize = size * sizeof(Char);
-        if (byteSize > 2 * sizeof(size_t)) {
-          // Copy three words
+        constexpr size_t wordWidth = sizeof(size_t);
+        switch ((byteSize + wordWidth - 1) / wordWidth) { // Number of words.
+        case 3:
           ml_.capacity_ = reinterpret_cast<const size_t*>(data)[2];
-          copyTwo:
+        case 2:
           ml_.size_ = reinterpret_cast<const size_t*>(data)[1];
-          copyOne:
+        case 1:
           ml_.data_ = *reinterpret_cast<Char**>(const_cast<Char*>(data));
-        } else if (byteSize > sizeof(size_t)) {
-          // Copy two words
-          goto copyTwo;
-        } else if (size > 0) {
-          // Copy one word
-          goto copyOne;
+        case 0:
+          break;
+        }
+      } else
+#endif
+      {
+        if (size != 0) {
+          fbstring_detail::pod_copy(data, data + size, small_);
         }
       }
       setSmallSize(size);
-      return;
-    } else if (size <= maxMediumSize) {
-      // Medium strings are allocated normally. Don't forget to
-      // allocate one extra Char for the terminating null.
-      auto const allocSize = goodMallocSize((1 + size) * sizeof(Char));
-      ml_.data_ = static_cast<Char*>(checkedMalloc(allocSize));
-      fbstring_detail::pod_copy(data, data + size, ml_.data_);
-      ml_.size_ = size;
-      ml_.capacity_ = (allocSize / sizeof(Char) - 1)
-                      | static_cast<category_type>(Category::isMedium);
     } else {
-      // Large strings are allocated differently
-      size_t effectiveCapacity = size;
-      auto const newRC = RefCounted::create(data, & effectiveCapacity);
-      ml_.data_ = newRC->data_;
-      ml_.size_ = size;
-      ml_.capacity_ = effectiveCapacity
-                      | static_cast<category_type>(Category::isLarge);
+      if (size <= maxMediumSize) {
+        // Medium strings are allocated normally. Don't forget to
+        // allocate one extra Char for the terminating null.
+        auto const allocSize = goodMallocSize((1 + size) * sizeof(Char));
+        ml_.data_ = static_cast<Char*>(checkedMalloc(allocSize));
+        fbstring_detail::pod_copy(data, data + size, ml_.data_);
+        ml_.size_ = size;
+        ml_.setCapacity(allocSize / sizeof(Char) - 1, Category::isMedium);
+      } else {
+        // Large strings are allocated differently
+        size_t effectiveCapacity = size;
+        auto const newRC = RefCounted::create(data, & effectiveCapacity);
+        ml_.data_ = newRC->data_;
+        ml_.size_ = size;
+        ml_.setCapacity(effectiveCapacity, Category::isLarge);
+      }
+      ml_.data_[size] = '\0';
     }
-    writeTerminator();
   }
 
   ~fbstring_core() noexcept {
@@ -458,12 +456,11 @@ public:
       ml_.data_ = data;
       ml_.size_ = size;
       // Don't forget about null terminator
-      ml_.capacity_ = (allocatedSize - 1)
-                      | static_cast<category_type>(Category::isMedium);
+      ml_.setCapacity(allocatedSize - 1, Category::isMedium);
     } else {
       // No need for the memory
       free(data);
-      setSmallSize(0);
+      reset();
     }
   }
 
@@ -495,11 +492,11 @@ public:
       // If this fails, someone placed the wrong capacity in an
       // fbstring.
       assert(effectiveCapacity >= ml_.capacity());
+      // Also copies terminator.
       fbstring_detail::pod_copy(ml_.data_, ml_.data_ + ml_.size_ + 1,
                                 newRC->data_);
       RefCounted::decrementRefs(ml_.data_);
       ml_.data_ = newRC->data_;
-      // No need to call writeTerminator(), we have + 1 above.
     }
     return ml_.data_;
   }
@@ -526,7 +523,7 @@ public:
       // handling.
       assert(ml_.size_ >= delta);
       ml_.size_ -= delta;
-      writeTerminator();
+      ml_.data_[ml_.size_] = '\0';
     } else {
       assert(ml_.size_ >= delta);
       // Shared large string, must make unique. This is because of the
@@ -539,7 +536,7 @@ public:
     }
   }
 
-  void reserve(size_t minCapacity) {
+  void reserve(size_t minCapacity, bool disableSSO = FBSTRING_DISABLE_SSO) {
     if (category() == Category::isLarge) {
       // Ensure unique
       if (RefCounted::refs(ml_.data_) > 1) {
@@ -550,14 +547,12 @@ public:
         // call to reserve.
         minCapacity = std::max(minCapacity, ml_.capacity());
         auto const newRC = RefCounted::create(& minCapacity);
+        // Also copies terminator.
         fbstring_detail::pod_copy(ml_.data_, ml_.data_ + ml_.size_ + 1,
                                    newRC->data_);
-        // Done with the old data. No need to call writeTerminator(),
-        // we have + 1 above.
         RefCounted::decrementRefs(ml_.data_);
         ml_.data_ = newRC->data_;
-        ml_.capacity_ = minCapacity
-                        | static_cast<category_type>(Category::isLarge);
+        ml_.setCapacity(minCapacity, Category::isLarge);
         // size remains unchanged
       } else {
         // String is not shared, so let's try to realloc (if needed)
@@ -567,9 +562,7 @@ public:
                RefCounted::reallocate(ml_.data_, ml_.size_,
                                       ml_.capacity(), minCapacity);
           ml_.data_ = newRC->data_;
-          ml_.capacity_ = minCapacity
-                          | static_cast<category_type>(Category::isLarge);
-          writeTerminator();
+          ml_.setCapacity(minCapacity, Category::isLarge);
         }
         assert(capacity() >= minCapacity);
       }
@@ -582,113 +575,91 @@ public:
         // Keep the string at medium size. Don't forget to allocate
         // one extra Char for the terminating null.
         size_t capacityBytes = goodMallocSize((1 + minCapacity) * sizeof(Char));
+        // Also copies terminator.
         ml_.data_ = static_cast<Char *>(
           smartRealloc(
             ml_.data_,
-            ml_.size_ * sizeof(Char),
+            (ml_.size_ + 1) * sizeof(Char),
             (ml_.capacity() + 1) * sizeof(Char),
             capacityBytes));
-        writeTerminator();
-        ml_.capacity_ = (capacityBytes / sizeof(Char) - 1)
-                        | static_cast<category_type>(Category::isMedium);
+        ml_.setCapacity(capacityBytes / sizeof(Char) - 1, Category::isMedium);
       } else {
         // Conversion from medium to large string
         fbstring_core nascent;
         // Will recurse to another branch of this function
         nascent.reserve(minCapacity);
         nascent.ml_.size_ = ml_.size_;
-        fbstring_detail::pod_copy(ml_.data_, ml_.data_ + ml_.size_,
+        // Also copies terminator.
+        fbstring_detail::pod_copy(ml_.data_, ml_.data_ + ml_.size_ + 1,
                                   nascent.ml_.data_);
         nascent.swap(*this);
-        writeTerminator();
         assert(capacity() >= minCapacity);
       }
     } else {
       assert(category() == Category::isSmall);
-      if (minCapacity > maxMediumSize) {
-        // large
-        auto const newRC = RefCounted::create(& minCapacity);
-        auto const size = smallSize();
-        fbstring_detail::pod_copy(small_, small_ + size + 1, newRC->data_);
-        // No need for writeTerminator(), we wrote it above with + 1.
-        ml_.data_ = newRC->data_;
-        ml_.size_ = size;
-        ml_.capacity_ = minCapacity
-                        | static_cast<category_type>(Category::isLarge);
-        assert(capacity() >= minCapacity);
-      } else if (minCapacity > maxSmallSize) {
+      if (!disableSSO && minCapacity <= maxSmallSize) {
+        // small
+        // Nothing to do, everything stays put
+      } else if (minCapacity <= maxMediumSize) {
         // medium
         // Don't forget to allocate one extra Char for the terminating null
         auto const allocSizeBytes =
           goodMallocSize((1 + minCapacity) * sizeof(Char));
-        auto const data = static_cast<Char*>(checkedMalloc(allocSizeBytes));
+        auto const pData = static_cast<Char*>(checkedMalloc(allocSizeBytes));
         auto const size = smallSize();
-        fbstring_detail::pod_copy(small_, small_ + size + 1, data);
-        // No need for writeTerminator(), we wrote it above with + 1.
-        ml_.data_ = data;
+        // Also copies terminator.
+        fbstring_detail::pod_copy(small_, small_ + size + 1, pData);
+        ml_.data_ = pData;
         ml_.size_ = size;
-        ml_.capacity_ = (allocSizeBytes / sizeof(Char) - 1)
-                        | static_cast<category_type>(Category::isMedium);
+        ml_.setCapacity(allocSizeBytes / sizeof(Char) - 1, Category::isMedium);
       } else {
-        // small
-        // Nothing to do, everything stays put
+        // large
+        auto const newRC = RefCounted::create(& minCapacity);
+        auto const size = smallSize();
+        // Also copies terminator.
+        fbstring_detail::pod_copy(small_, small_ + size + 1, newRC->data_);
+        ml_.data_ = newRC->data_;
+        ml_.size_ = size;
+        ml_.setCapacity(minCapacity, Category::isLarge);
+        assert(capacity() >= minCapacity);
       }
     }
     assert(capacity() >= minCapacity);
   }
 
-  Char * expand_noinit(const size_t delta) {
+  Char * expand_noinit(const size_t delta,
+                       bool expGrowth = false,
+                       bool disableSSO = FBSTRING_DISABLE_SSO) {
     // Strategy is simple: make room, then change size
     assert(capacity() >= size());
     size_t sz, newSz;
     if (category() == Category::isSmall) {
       sz = smallSize();
       newSz = sz + delta;
-      if (newSz <= maxSmallSize) {
+      if (!disableSSO && FBSTRING_LIKELY(newSz <= maxSmallSize)) {
         setSmallSize(newSz);
         return small_ + sz;
       }
-      reserve(newSz);
+      reserve(expGrowth ? std::max(newSz, 2 * maxSmallSize) : newSz);
     } else {
       sz = ml_.size_;
-      newSz = ml_.size_ + delta;
-      if (newSz > capacity()) {
-        reserve(newSz);
+      newSz = sz + delta;
+      if (FBSTRING_UNLIKELY(newSz > capacity())) {
+        // ensures not shared
+        reserve(expGrowth ? std::max(newSz, 1 + capacity() * 3 / 2) : newSz);
       }
     }
     assert(capacity() >= newSz);
     // Category can't be small - we took care of that above
     assert(category() == Category::isMedium || category() == Category::isLarge);
     ml_.size_ = newSz;
-    writeTerminator();
+    ml_.data_[newSz] = '\0';
     assert(size() == newSz);
     return ml_.data_ + sz;
   }
 
   void push_back(Char c) {
-    assert(capacity() >= size());
-    size_t sz;
-    if (category() == Category::isSmall) {
-      sz = smallSize();
-      if (sz < maxSmallSize) {
-        small_[sz] = c;
-        setSmallSize(sz + 1);
-        return;
-      }
-      reserve(maxSmallSize * 2);
-    } else {
-      sz = ml_.size_;
-      if (sz == capacity()) {  // always true for isShared()
-        reserve(1 + sz * 3 / 2);  // ensures not shared
-      }
-    }
-    assert(!isShared());
-    assert(capacity() >= sz + 1);
-    // Category can't be small - we took care of that above
-    assert(category() == Category::isMedium || category() == Category::isLarge);
-    ml_.size_ = sz + 1;
-    ml_.data_[sz] = c;
-    writeTerminator();
+    *expand_noinit(1, /* expGrowth = */ true) = c;
   }
 
   size_t size() const {
@@ -713,30 +684,19 @@ public:
     return category() == Category::isLarge && RefCounted::refs(ml_.data_) > 1;
   }
 
-  void writeTerminator() {
-    if (category() == Category::isSmall) {
-      const auto s = smallSize();
-      if (s != maxSmallSize) {
-        small_[s] = '\0';
-      }
-    } else {
-      ml_.data_[ml_.size_] = '\0';
-    }
-  }
-
 private:
   // Disabled
   fbstring_core & operator=(const fbstring_core & rhs);
 
-  struct MediumLarge {
-    Char * data_;
-    size_t size_;
-    size_t capacity_;
-
-    size_t capacity() const {
-      return capacity_ & capacityExtractMask;
-    }
-  };
+  // Equivalent to setSmallSize(0) but a few ns faster in
+  // microbenchmarks.
+  void reset() {
+    ml_.capacity_ = kIsLittleEndian
+      ? maxSmallSize << (8 * (sizeof(size_t) - sizeof(Char)))
+      : maxSmallSize << 2;
+    small_[0] = '\0';
+    assert(category() == Category::isSmall && size() == 0);
+  }
 
   struct RefCounted {
     std::atomic<size_t> refCount_;
@@ -805,6 +765,42 @@ private:
     }
   };
 
+  typedef std::conditional<sizeof(size_t) == 4, uint32_t, uint64_t>::type
+          category_type;
+
+  enum class Category : category_type {
+    isSmall = 0,
+    isMedium = kIsLittleEndian
+      ? sizeof(size_t) == 4 ? 0x80000000 : 0x8000000000000000
+      : 0x2,
+    isLarge =  kIsLittleEndian
+      ? sizeof(size_t) == 4 ? 0x40000000 : 0x4000000000000000
+      : 0x1,
+  };
+
+  Category category() const {
+    // works for both big-endian and little-endian
+    return static_cast<Category>(ml_.capacity_ & categoryExtractMask);
+  }
+
+  struct MediumLarge {
+    Char * data_;
+    size_t size_;
+    size_t capacity_;
+
+    size_t capacity() const {
+      return kIsLittleEndian
+        ? capacity_ & capacityExtractMask
+        : capacity_ >> 2;
+    }
+
+    void setCapacity(size_t cap, Category cat) {
+        capacity_ = kIsLittleEndian
+          ? cap | static_cast<category_type>(cat)
+          : (cap << 2) | static_cast<category_type>(cat);
+    }
+  };
+
   union {
     Char small_[sizeof(MediumLarge) / sizeof(Char)];
     MediumLarge ml_;
@@ -815,32 +811,22 @@ private:
     maxSmallSize = lastChar / sizeof(Char),
     maxMediumSize = 254 / sizeof(Char),            // coincides with the small
                                                    // bin size in dlmalloc
-    categoryExtractMask = sizeof(size_t) == 4 ? 0xC0000000 : 0xC000000000000000,
-    capacityExtractMask = ~categoryExtractMask,
+    categoryExtractMask = kIsLittleEndian
+      ? sizeof(size_t) == 4 ? 0xC0000000 : 0xC000000000000000
+      : 0x3,
+    capacityExtractMask = kIsLittleEndian
+      ? ~categoryExtractMask
+      : 0x0 /*unused*/,
   };
   static_assert(!(sizeof(MediumLarge) % sizeof(Char)),
                 "Corrupt memory layout for fbstring.");
 
-  typedef std::conditional<sizeof(size_t) == 4, uint32_t, uint64_t>::type
-          category_type;
-
-  enum class Category : category_type {
-    isSmall = 0,
-    isMedium = sizeof(size_t) == 4 ? 0x80000000 : 0x8000000000000000,
-    isLarge =  sizeof(size_t) == 4 ? 0x40000000 : 0x4000000000000000,
-  };
-
-  Category category() const {
-    // Assumes little endian
-    return static_cast<Category>(ml_.capacity_ & categoryExtractMask);
-  }
-
   size_t smallSize() const {
-    assert(category() == Category::isSmall &&
-           static_cast<size_t>(small_[maxSmallSize])
-           <= static_cast<size_t>(maxSmallSize));
-    return static_cast<size_t>(maxSmallSize)
-      - static_cast<size_t>(small_[maxSmallSize]);
+    assert(category() == Category::isSmall);
+    constexpr auto shift = kIsLittleEndian ? 0 : 2;
+    auto smallShifted = static_cast<size_t>(small_[maxSmallSize]) >> shift;
+    assert(static_cast<size_t>(maxSmallSize) >= smallShifted);
+    return static_cast<size_t>(maxSmallSize) - smallShifted;
   }
 
   void setSmallSize(size_t s) {
@@ -848,14 +834,12 @@ private:
     // so don't assume anything about the previous value of
     // small_[maxSmallSize].
     assert(s <= maxSmallSize);
-    small_[maxSmallSize] = maxSmallSize - s;
-    writeTerminator();
+    constexpr auto shift = kIsLittleEndian ? 0 : 2;
+    small_[maxSmallSize] = (maxSmallSize - s) << shift;
+    small_[s] = '\0';
+    assert(category() == Category::isSmall && size() == s);
   }
 };
-
-#if defined(__GNUC__) && !defined(__clang__)
-# pragma GCC diagnostic pop
-#endif
 
 #ifndef _LIBSTDCXX_FBSTRING
 /**
@@ -991,6 +975,7 @@ public:
                                 > const_reverse_iterator;
 
   static const size_type npos;                     // = size_type(-1)
+  typedef std::true_type IsRelocatable;
 
 private:
   static void procrustes(size_type& n, size_type nmax) {
@@ -999,7 +984,23 @@ private:
 
 public:
   // C++11 21.4.2 construct/copy/destroy
-  explicit basic_fbstring(const A& /*a*/ = A()) noexcept {
+
+  // Note: while the following two constructors can be (and previously were)
+  // collapsed into one constructor written this way:
+  //
+  //   explicit basic_fbstring(const A& a = A()) noexcept { }
+  //
+  // This can cause Clang (at least version 3.7) to fail with the error:
+  //   "chosen constructor is explicit in copy-initialization ...
+  //   in implicit initialization of field '(x)' with omitted initializer"
+  //
+  // if used in a struct which is default-initialized.  Hence the split into
+  // these two separate constructors.
+
+  basic_fbstring() noexcept : basic_fbstring(A()) {
+  }
+
+  explicit basic_fbstring(const A&) noexcept {
   }
 
   basic_fbstring(const basic_fbstring& str)
@@ -1018,8 +1019,10 @@ public:
   }
 #endif
 
-  basic_fbstring(const basic_fbstring& str, size_type pos,
-                 size_type n = npos, const A& a = A()) {
+  basic_fbstring(const basic_fbstring& str,
+                 size_type pos,
+                 size_type n = npos,
+                 const A& /* a */ = A()) {
     assign(str, pos, n);
   }
 
@@ -1036,9 +1039,8 @@ public:
   }
 
   basic_fbstring(size_type n, value_type c, const A& /*a*/ = A()) {
-    auto const data = store_.expand_noinit(n);
-    fbstring_detail::pod_fill(data, data + n, c);
-    store_.writeTerminator();
+    auto const pData = store_.expand_noinit(n);
+    fbstring_detail::pod_fill(pData, pData + n, c);
   }
 
   template <class InIt>
@@ -1069,6 +1071,8 @@ public:
   }
 
   basic_fbstring& operator=(const basic_fbstring& lhs) {
+    Invariant checker(*this);
+
     if (FBSTRING_UNLIKELY(&lhs == this)) {
       return *this;
     }
@@ -1076,13 +1080,15 @@ public:
     auto const srcSize = lhs.size();
     if (capacity() >= srcSize && !store_.isShared()) {
       // great, just copy the contents
-      if (oldSize < srcSize)
+      if (oldSize < srcSize) {
         store_.expand_noinit(srcSize - oldSize);
-      else
+      } else {
         store_.shrink(oldSize - srcSize);
+      }
       assert(size() == srcSize);
-      fbstring_detail::pod_copy(lhs.begin(), lhs.end(), begin());
-      store_.writeTerminator();
+      auto srcData = lhs.data();
+      fbstring_detail::pod_copy(
+          srcData, srcData + srcSize, store_.mutable_data());
     } else {
       // need to reallocate, so we may as well create a brand new string
       basic_fbstring(lhs).swap(*this);
@@ -1126,6 +1132,8 @@ public:
   }
 
   basic_fbstring& operator=(value_type c) {
+    Invariant checker(*this);
+
     if (empty()) {
       store_.expand_noinit(1);
     } else if (store_.isShared()) {
@@ -1134,8 +1142,7 @@ public:
     } else {
       store_.shrink(size() - 1);
     }
-    *store_.mutable_data() = c;
-    store_.writeTerminator();
+    front() = c;
     return *this;
   }
 
@@ -1209,29 +1216,15 @@ public:
   }
 
   void resize(const size_type n, const value_type c = value_type()) {
+    Invariant checker(*this);
+
     auto size = this->size();
     if (n <= size) {
       store_.shrink(size - n);
     } else {
-      // Do this in two steps to minimize slack memory copied (see
-      // smartRealloc).
-      auto const capacity = this->capacity();
-      assert(capacity >= size);
-      if (size < capacity) {
-        auto delta = std::min(n, capacity) - size;
-        store_.expand_noinit(delta);
-        fbstring_detail::pod_fill(begin() + size, end(), c);
-        size += delta;
-        if (size == n) {
-          store_.writeTerminator();
-          return;
-        }
-        assert(size < n);
-      }
       auto const delta = n - size;
-      store_.expand_noinit(delta);
-      fbstring_detail::pod_fill(end() - delta, end(), c);
-      store_.writeTerminator();
+      auto pData = store_.expand_noinit(delta);
+      fbstring_detail::pod_fill(pData, pData + delta, c);
     }
     assert(this->size() == n);
   }
@@ -1311,10 +1304,8 @@ public:
   }
 
   basic_fbstring& append(const value_type* s, size_type n) {
-#ifndef NDEBUG
     Invariant checker(*this);
-    (void) checker;
-#endif
+
     if (FBSTRING_UNLIKELY(!n)) {
       // Unlikely but must be done
       return *this;
@@ -1335,15 +1326,10 @@ public:
       // Restore the source
       s = data() + offset;
     }
-    // Warning! Repeated appends with short strings may actually incur
-    // practically quadratic performance. Avoid that by pushing back
-    // the first character (which ensures exponential growth) and then
-    // appending the rest normally. Worst case the append may incur a
-    // second allocation but that will be rare.
-    push_back(*s++);
-    --n;
-    memcpy(store_.expand_noinit(n), s, n * sizeof(value_type));
-    assert(size() == oldSize + n + 1);
+
+    fbstring_detail::pod_copy(
+        s, s + n, store_.expand_noinit(n, /* expGrowth = */ true));
+    assert(size() == oldSize + n);
     return *this;
   }
 
@@ -1352,7 +1338,9 @@ public:
   }
 
   basic_fbstring& append(size_type n, value_type c) {
-    resize(size() + n, c);
+    Invariant checker(*this);
+    auto pData = store_.expand_noinit(n, /* expGrowth = */ true);
+    fbstring_detail::pod_fill(pData, pData + n, c);
     return *this;
   }
 
@@ -1389,18 +1377,20 @@ public:
 
   basic_fbstring& assign(const value_type* s, const size_type n) {
     Invariant checker(*this);
-    (void) checker;
-    if (size() >= n) {
-      std::copy(s, s + n, begin());
+
+    // s can alias this, we need to use pod_move.
+    if (n == 0) {
+      resize(0);
+    } else if (size() >= n) {
+      fbstring_detail::pod_move(s, s + n, store_.mutable_data());
       resize(n);
       assert(size() == n);
     } else {
       const value_type *const s2 = s + size();
-      std::copy(s, s2, begin());
+      fbstring_detail::pod_move(s, s2, store_.mutable_data());
       append(s2, n - size());
       assert(size() == n);
     }
-    store_.writeTerminator();
     assert(size() == n);
     return *this;
   }
@@ -1451,37 +1441,66 @@ public:
     return begin() + pos;
   }
 
+#ifndef _LIBSTDCXX_FBSTRING
+ private:
+  typedef std::basic_istream<value_type, traits_type> istream_type;
+
+ public:
+  friend inline istream_type& getline(istream_type& is,
+                                      basic_fbstring& str,
+                                      value_type delim) {
+    Invariant checker(str);
+
+    str.clear();
+    size_t size = 0;
+    while (true) {
+      size_t avail = str.capacity() - size;
+      // fbstring has 1 byte extra capacity for the null terminator,
+      // and getline null-terminates the read string.
+      is.getline(str.store_.expand_noinit(avail), avail + 1, delim);
+      size += is.gcount();
+
+      if (is.bad() || is.eof() || !is.fail()) {
+        // Done by either failure, end of file, or normal read.
+        if (!is.bad() && !is.eof()) {
+          --size; // gcount() also accounts for the delimiter.
+        }
+        str.resize(size);
+        break;
+      }
+
+      assert(size == str.size());
+      assert(size == str.capacity());
+      // Start at minimum allocation 63 + terminator = 64.
+      str.reserve(std::max<size_t>(63, 3 * size / 2));
+      // Clear the error so we can continue reading.
+      is.clear();
+    }
+    return is;
+  }
+
+  friend inline istream_type& getline(istream_type& is, basic_fbstring& str) {
+    return getline(is, str, '\n');
+  }
+#endif
+
 private:
   template <int i> class Selector {};
 
-  iterator insertImplDiscr(const_iterator p,
+  iterator insertImplDiscr(const_iterator i,
                            size_type n, value_type c, Selector<1>) {
     Invariant checker(*this);
-    (void) checker;
-    auto const pos = p - begin();
-    assert(p >= begin() && p <= end());
-    if (capacity() - size() < n) {
-      const size_type sz = p - begin();
-      reserve(size() + n);
-      p = begin() + sz;
-    }
-    const iterator oldEnd = end();
-    if (n < size_type(oldEnd - p)) {
-      append(oldEnd - n, oldEnd);
-      //std::copy(
-      //    reverse_iterator(oldEnd - n),
-      //    reverse_iterator(p),
-      //    reverse_iterator(oldEnd));
-      fbstring_detail::pod_move(&*p, &*oldEnd - n,
-                                begin() + pos + n);
-      std::fill(begin() + pos, begin() + pos + n, c);
-    } else {
-      append(n - (end() - p), c);
-      append(iterator(p), oldEnd);
-      std::fill(iterator(p), oldEnd, c);
-    }
-    store_.writeTerminator();
-    return begin() + pos;
+
+    assert(i >= begin() && i <= end());
+    const size_type pos = i - begin();
+
+    auto oldSize = size();
+    store_.expand_noinit(n, /* expGrowth = */ true);
+    auto b = begin();
+    fbstring_detail::pod_move(b + pos, b + oldSize, b + pos + n);
+    fbstring_detail::pod_fill(b + pos, b + pos + n, c);
+
+    return b + pos;
   }
 
   template<class InputIter>
@@ -1493,43 +1512,23 @@ private:
 
   template <class FwdIterator>
   iterator insertImpl(const_iterator i,
-                  FwdIterator s1, FwdIterator s2, std::forward_iterator_tag) {
+                      FwdIterator s1,
+                      FwdIterator s2,
+                      std::forward_iterator_tag) {
     Invariant checker(*this);
-    (void) checker;
-    const size_type pos = i - begin();
-    const typename std::iterator_traits<FwdIterator>::difference_type n2 =
-      std::distance(s1, s2);
-    assert(n2 >= 0);
-    using namespace fbstring_detail;
-    assert(pos <= size());
 
-    const typename std::iterator_traits<FwdIterator>::difference_type maxn2 =
-      capacity() - size();
-    if (maxn2 < n2) {
-      // realloc the string
-      reserve(size() + n2);
-      i = begin() + pos;
-    }
-    if (pos + n2 <= size()) {
-      const iterator tailBegin = end() - n2;
-      store_.expand_noinit(n2);
-      fbstring_detail::pod_copy(tailBegin, tailBegin + n2, end() - n2);
-      std::copy(const_reverse_iterator(tailBegin), const_reverse_iterator(i),
-                reverse_iterator(tailBegin + n2));
-      std::copy(s1, s2, begin() + pos);
-    } else {
-      FwdIterator t = s1;
-      const size_type old_size = size();
-      std::advance(t, old_size - pos);
-      const size_t newElems = std::distance(t, s2);
-      store_.expand_noinit(n2);
-      std::copy(t, s2, begin() + old_size);
-      fbstring_detail::pod_copy(data() + pos, data() + old_size,
-                                 begin() + old_size + newElems);
-      std::copy(s1, t, begin() + pos);
-    }
-    store_.writeTerminator();
-    return begin() + pos;
+    assert(i >= begin() && i <= end());
+    const size_type pos = i - begin();
+    auto n = std::distance(s1, s2);
+    assert(n >= 0);
+
+    auto oldSize = size();
+    store_.expand_noinit(n, /* expGrowth = */ true);
+    auto b = begin();
+    fbstring_detail::pod_move(b + pos, b + oldSize, b + pos + n);
+    std::copy(s1, s2, b + pos);
+
+    return b + pos;
   }
 
   template <class InputIterator>
@@ -1559,7 +1558,7 @@ public:
 
   basic_fbstring& erase(size_type pos = 0, size_type n = npos) {
     Invariant checker(*this);
-    (void) checker;
+
     enforce(pos <= length(), std::__throw_out_of_range, "");
     procrustes(n, length() - pos);
     std::copy(begin() + pos + n, end(), begin() + pos);
@@ -1613,7 +1612,7 @@ public:
   basic_fbstring& replace(size_type pos, size_type n1,
                           StrOrLength s_or_n2, NumOrChar n_or_c) {
     Invariant checker(*this);
-    (void) checker;
+
     enforce(pos <= size(), std::__throw_out_of_range, "");
     procrustes(n1, length() - pos);
     const iterator b = begin() + pos;
@@ -1662,9 +1661,12 @@ private:
   }
 
 private:
-  template <class FwdIterator>
-  bool replaceAliased(iterator i1, iterator i2,
-                      FwdIterator s1, FwdIterator s2, std::false_type) {
+ template <class FwdIterator>
+ bool replaceAliased(iterator /* i1 */,
+                     iterator /* i2 */,
+                     FwdIterator /* s1 */,
+                     FwdIterator /* s2 */,
+                     std::false_type) {
     return false;
   }
 
@@ -1689,7 +1691,6 @@ private:
   void replaceImpl(iterator i1, iterator i2,
                    FwdIterator s1, FwdIterator s2, std::forward_iterator_tag) {
     Invariant checker(*this);
-    (void) checker;
 
     // Handle aliased replace
     if (replaceAliased(i1, i2, s1, s2,
@@ -1741,10 +1742,9 @@ public:
     enforce(pos <= size(), std::__throw_out_of_range, "");
     procrustes(n, size() - pos);
 
-    fbstring_detail::pod_copy(
-      data() + pos,
-      data() + pos + n,
-      s);
+    if (n != 0) {
+      fbstring_detail::pod_copy(data() + pos, data() + pos + n, s);
+    }
     return n;
   }
 
@@ -1768,11 +1768,12 @@ public:
 
   size_type find(const value_type* needle, const size_type pos,
                  const size_type nsize) const {
-    if (!nsize) return pos;
     auto const size = this->size();
     // nsize + pos can overflow (eg pos == npos), guard against that by checking
     // that nsize + pos does not wrap around.
     if (nsize + pos > size || nsize + pos < pos) return npos;
+
+    if (nsize == 0) return pos;
     // Don't use std::search, use a Boyer-Moore-like trick by comparing
     // the last characters first
     auto const haystack = data();
@@ -2094,7 +2095,8 @@ basic_fbstring<E, T, A, S> operator+(
   const auto len = basic_fbstring<E, T, A, S>::traits_type::length(lhs);
   if (rhs.capacity() >= len + rhs.size()) {
     // Good, at least we don't need to reallocate
-    return std::move(rhs.insert(rhs.begin(), lhs, lhs + len));
+    rhs.insert(rhs.begin(), lhs, lhs + len);
+    return rhs;
   }
   // Meh, no go. Do it by hand since we have len already.
   basic_fbstring<E, T, A, S> result;
@@ -2126,7 +2128,8 @@ basic_fbstring<E, T, A, S> operator+(
   //
   if (rhs.capacity() > rhs.size()) {
     // Good, at least we don't need to reallocate
-    return std::move(rhs.insert(rhs.begin(), lhs));
+    rhs.insert(rhs.begin(), lhs);
+    return rhs;
   }
   // Meh, no go. Forward to operator+(E, const&).
   auto const& rhsC = rhs;
@@ -2379,57 +2382,6 @@ operator<<(
   return os;
 }
 
-#ifndef _LIBSTDCXX_FBSTRING
-
-template <typename E, class T, class A, class S>
-inline
-std::basic_istream<typename basic_fbstring<E, T, A, S>::value_type,
-                   typename basic_fbstring<E, T, A, S>::traits_type>&
-getline(
-  std::basic_istream<typename basic_fbstring<E, T, A, S>::value_type,
-  typename basic_fbstring<E, T, A, S>::traits_type>& is,
-    basic_fbstring<E, T, A, S>& str,
-  typename basic_fbstring<E, T, A, S>::value_type delim) {
-  // Use the nonstandard getdelim()
-  char * buf = nullptr;
-  size_t size = 0;
-  for (;;) {
-    // This looks quadratic but it really depends on realloc
-    auto const newSize = size + 128;
-    buf = static_cast<char*>(checkedRealloc(buf, newSize));
-    is.getline(buf + size, newSize - size, delim);
-    if (is.bad() || is.eof() || !is.fail()) {
-      // done by either failure, end of file, or normal read
-      size += std::strlen(buf + size);
-      break;
-    }
-    // Here we have failed due to too short a buffer
-    // Minus one to discount the terminating '\0'
-    size = newSize - 1;
-    assert(buf[size] == 0);
-    // Clear the error so we can continue reading
-    is.clear();
-  }
-  basic_fbstring<E, T, A, S> result(buf, size, size + 1,
-                                    AcquireMallocatedString());
-  result.swap(str);
-  return is;
-}
-
-template <typename E, class T, class A, class S>
-inline
-std::basic_istream<typename basic_fbstring<E, T, A, S>::value_type,
-                   typename basic_fbstring<E, T, A, S>::traits_type>&
-getline(
-  std::basic_istream<typename basic_fbstring<E, T, A, S>::value_type,
-  typename basic_fbstring<E, T, A, S>::traits_type>& is,
-  basic_fbstring<E, T, A, S>& str) {
-  // Just forward to the version with a delimiter
-  return getline(is, str, '\n');
-}
-
-#endif
-
 template <typename E1, class T, class A, class S>
 const typename basic_fbstring<E1, T, A, S>::size_type
 basic_fbstring<E1, T, A, S>::npos =
@@ -2487,12 +2439,12 @@ _GLIBCXX_END_NAMESPACE_VERSION
 // Handle interaction with different C++ standard libraries, which
 // expect these types to be in different namespaces.
 
-#define FOLLY_FBSTRING_HASH1(T) \
-  template <> \
-  struct hash< ::folly::basic_fbstring<T> > { \
-    size_t operator()(const ::folly::fbstring& s) const { \
-      return ::folly::hash::fnv32_buf(s.data(), s.size()); \
-    } \
+#define FOLLY_FBSTRING_HASH1(T)                                        \
+  template <>                                                          \
+  struct hash< ::folly::basic_fbstring<T>> {                            \
+    size_t operator()(const ::folly::basic_fbstring<T>& s) const {     \
+      return ::folly::hash::fnv32_buf(s.data(), s.size() * sizeof(T)); \
+    }                                                                  \
   };
 
 // The C++11 standard says that these four are defined
@@ -2525,9 +2477,13 @@ FOLLY_FBSTRING_HASH
 
 #pragma GCC diagnostic pop
 
-#undef FBSTRING_DISABLE_ADDRESS_SANITIZER
+#undef FBSTRING_DISABLE_SSO
+#undef FBSTRING_SANITIZE_ADDRESS
 #undef throw
 #undef FBSTRING_LIKELY
 #undef FBSTRING_UNLIKELY
 
-#endif // FOLLY_BASE_FBSTRING_H_
+#ifdef FOLLY_DEFINED_NDEBUG_FOR_FBSTRING
+#undef NDEBUG
+#undef FOLLY_DEFINED_NDEBUG_FOR_FBSTRING
+#endif // FOLLY_DEFINED_NDEBUG_FOR_FBSTRING

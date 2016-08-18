@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements. See the NOTICE file
@@ -26,7 +26,7 @@
 namespace folly {
 
 EventHandler::EventHandler(EventBase* eventBase, int fd) {
-  event_set(&event_, fd, 0, &EventHandler::libeventCallback, this);
+  folly_event_set(&event_, fd, 0, &EventHandler::libeventCallback, this);
   if (eventBase != nullptr) {
     setEventBase(eventBase);
   } else {
@@ -49,8 +49,9 @@ bool EventHandler::registerImpl(uint16_t events, bool internal) {
   if (isHandlerRegistered()) {
     // If the new events are the same are the same as the already registered
     // flags, we don't have to do anything.  Just return.
+    auto flags = event_ref_flags(&event_);
     if (events == event_.ev_events &&
-        static_cast<bool>(event_.ev_flags & EVLIST_INTERNAL) == internal) {
+        static_cast<bool>(flags & EVLIST_INTERNAL) == internal) {
       return true;
     }
 
@@ -67,7 +68,7 @@ bool EventHandler::registerImpl(uint16_t events, bool internal) {
 
   // Set EVLIST_INTERNAL if this is an internal event
   if (internal) {
-    event_.ev_flags |= EVLIST_INTERNAL;
+    event_ref_flags(&event_) |= EVLIST_INTERNAL;
   }
 
   // Add the event.
@@ -123,13 +124,13 @@ void EventHandler::changeHandlerFD(int fd) {
   ensureNotRegistered(__func__);
   // event_set() resets event_base.ev_base, so manually restore it afterwards
   struct event_base* evb = event_.ev_base;
-  event_set(&event_, fd, 0, &EventHandler::libeventCallback, this);
+  folly_event_set(&event_, fd, 0, &EventHandler::libeventCallback, this);
   event_.ev_base = evb; // don't use event_base_set(), since evb may be nullptr
 }
 
 void EventHandler::initHandler(EventBase* eventBase, int fd) {
   ensureNotRegistered(__func__);
-  event_set(&event_, fd, 0, &EventHandler::libeventCallback, this);
+  folly_event_set(&event_, fd, 0, &EventHandler::libeventCallback, this);
   setEventBase(eventBase);
 }
 
@@ -143,9 +144,10 @@ void EventHandler::ensureNotRegistered(const char* fn) {
   }
 }
 
-void EventHandler::libeventCallback(int fd, short events, void* arg) {
+void EventHandler::libeventCallback(libevent_fd_t fd, short events, void* arg) {
   EventHandler* handler = reinterpret_cast<EventHandler*>(arg);
   assert(fd == handler->event_.ev_fd);
+  (void)fd; // prevent unused variable warnings
 
   auto observer = handler->eventBase_->getExecutionObserver();
   if (observer) {
@@ -153,7 +155,7 @@ void EventHandler::libeventCallback(int fd, short events, void* arg) {
   }
 
   // this can't possibly fire if handler->eventBase_ is nullptr
-  (void) handler->eventBase_->bumpHandlingTime();
+  handler->eventBase_->bumpHandlingTime();
 
   handler->handlerReady(events);
 
@@ -168,7 +170,7 @@ void EventHandler::setEventBase(EventBase* eventBase) {
 }
 
 bool EventHandler::isPending() const {
-  if (event_.ev_flags & EVLIST_ACTIVE) {
+  if (event_ref_flags(&event_) & EVLIST_ACTIVE) {
     if (event_.ev_res & EV_READ) {
       return true;
     }

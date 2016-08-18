@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_IO_IOBUF_H_
-#define FOLLY_IO_IOBUF_H_
+#pragma once
 
 #include <glog/logging.h>
 #include <atomic>
@@ -25,7 +24,6 @@
 #include <cstring>
 #include <memory>
 #include <limits>
-#include <sys/uio.h>
 #include <type_traits>
 
 #include <boost/iterator/iterator_facade.hpp>
@@ -33,6 +31,7 @@
 #include <folly/FBString.h>
 #include <folly/Range.h>
 #include <folly/FBVector.h>
+#include <folly/portability/SysUio.h>
 
 // Ignore shadowing warnings within this file, so includers can use -Wshadow.
 #pragma GCC diagnostic push
@@ -372,6 +371,16 @@ class IOBuf {
   static std::unique_ptr<IOBuf> wrapBuffer(ByteRange br) {
     return wrapBuffer(br.data(), br.size());
   }
+
+  /**
+   * Similar to wrapBuffer(), but returns IOBuf by value rather than
+   * heap-allocating it.
+   */
+  static IOBuf wrapBufferAsValue(const void* buf, uint64_t capacity);
+  static IOBuf wrapBufferAsValue(ByteRange br) {
+    return wrapBufferAsValue(br.data(), br.size());
+  }
+
   IOBuf(WrapBufferOp op, const void* buf, uint64_t capacity);
   IOBuf(WrapBufferOp op, ByteRange br);
 
@@ -914,6 +923,10 @@ class IOBuf {
       return true;
     }
 
+    if (UNLIKELY(sharedInfo()->externallyShared)) {
+      return true;
+    }
+
     if (LIKELY(!(flags() & kFlagMaybeShared))) {
       return false;
     }
@@ -970,6 +983,30 @@ class IOBuf {
   void unshareOne() {
     if (isSharedOne()) {
       unshareOneSlow();
+    }
+  }
+
+  /**
+   * Mark the underlying buffers in this chain as shared with external memory
+   * management mechanism. This will make isShared() always returns true.
+   *
+   * This function is not thread-safe, and only safe to call immediately after
+   * creating an IOBuf, before it has been shared with other threads.
+   */
+  void markExternallyShared();
+
+  /**
+   * Mark the underlying buffer that this IOBuf refers to as shared with
+   * external memory management mechanism. This will make isSharedOne() always
+   * returns true.
+   *
+   * This function is not thread-safe, and only safe to call immediately after
+   * creating an IOBuf, before it has been shared with other threads.
+   */
+  void markExternallySharedOne() {
+    SharedInfo* info = sharedInfo();
+    if (info) {
+      info->externallyShared = true;
     }
   }
 
@@ -1067,6 +1104,12 @@ class IOBuf {
   std::unique_ptr<IOBuf> clone() const;
 
   /**
+   * Similar to clone(). But returns IOBuf by value rather than heap-allocating
+   * it.
+   */
+  IOBuf cloneAsValue() const;
+
+  /**
    * Return a new IOBuf with the same data as this IOBuf.
    *
    * The new IOBuf returned will not be part of a chain (even if this IOBuf is
@@ -1075,16 +1118,26 @@ class IOBuf {
   std::unique_ptr<IOBuf> cloneOne() const;
 
   /**
+   * Similar to cloneOne(). But returns IOBuf by value rather than
+   * heap-allocating it.
+   */
+  IOBuf cloneOneAsValue() const;
+
+  /**
    * Similar to Clone(). But use other as the head node. Other nodes in the
    * chain (if any) will be allocted on heap.
    */
-  void cloneInto(IOBuf& other) const;
+  void cloneInto(IOBuf& other) const {
+    other = cloneAsValue();
+  }
 
   /**
    * Similar to CloneOne(). But to fill an existing IOBuf instead of a new
    * IOBuf.
    */
-  void cloneOneInto(IOBuf& other) const;
+  void cloneOneInto(IOBuf& other) const {
+    other = cloneOneAsValue();
+  }
 
   /**
    * Return an iovector suitable for e.g. writev()
@@ -1198,6 +1251,7 @@ class IOBuf {
     FreeFunction freeFn;
     void* userData;
     std::atomic<uint32_t> refcount;
+    bool externallyShared{false};
   };
   // Helper structs for use by operator new and delete
   struct HeapPrefix;
@@ -1467,5 +1521,3 @@ inline IOBuf::Iterator IOBuf::end() const { return cend(); }
 } // folly
 
 #pragma GCC diagnostic pop
-
-#endif // FOLLY_IO_IOBUF_H_

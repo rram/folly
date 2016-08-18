@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,9 +19,10 @@
 
 #include <folly/Range.h>
 
-#include <sys/mman.h>
+#include <folly/portability/Memory.h>
+#include <folly/portability/SysMman.h>
+
 #include <array>
-#include <cstdlib>
 #include <iterator>
 #include <limits>
 #include <random>
@@ -29,17 +30,11 @@
 #include <type_traits>
 #include <vector>
 #include <boost/range/concepts.hpp>
+#include <boost/algorithm/string/trim.hpp>
 #include <gtest/gtest.h>
 
-namespace folly { namespace detail {
-
-// declaration of functions in Range.cpp
-size_t qfind_first_byte_of_byteset(const StringPiece haystack,
-                                   const StringPiece needles);
-
-}}  // namespaces
-
 using namespace folly;
+using namespace folly::detail;
 using namespace std;
 
 static_assert(std::is_literal_type<StringPiece>::value, "");
@@ -298,17 +293,17 @@ TEST(StringPiece, InvalidRange) {
   EXPECT_THROW(a.subpiece(6), std::out_of_range);
 }
 
-#if FOLLY_HAVE_CONSTEXPR_STRLEN
 constexpr char helloArray[] = "hello";
 
 TEST(StringPiece, Constexpr) {
   constexpr StringPiece hello1("hello");
   EXPECT_EQ("hello", hello1);
+  static_assert(hello1.size() == 5, "hello size should be 5 at compile time");
 
   constexpr StringPiece hello2(helloArray);
   EXPECT_EQ("hello", hello2);
+  static_assert(hello2.size() == 5, "hello size should be 5 at compile time");
 }
-#endif
 
 TEST(StringPiece, Prefix) {
   StringPiece a("hello");
@@ -428,6 +423,43 @@ TEST(StringPiece, SuffixEmpty) {
   EXPECT_EQ("", a);
   EXPECT_FALSE(a.removeSuffix('a'));
   EXPECT_EQ("", a);
+}
+
+TEST(StringPiece, erase) {
+  StringPiece a("hello");
+  auto b = a.begin();
+  auto e = b + 1;
+  a.erase(b, e);
+  EXPECT_EQ("ello", a);
+
+  e = a.end();
+  b = e - 1;
+  a.erase(b, e);
+  EXPECT_EQ("ell", a);
+
+  b = a.end() - 1;
+  e = a.end() - 1;
+  EXPECT_THROW(a.erase(b, e), std::out_of_range);
+
+  b = a.begin();
+  e = a.end();
+  a.erase(b, e);
+  EXPECT_EQ("", a);
+
+  a = "hello";
+  b = a.begin();
+  e = b + 2;
+  a.erase(b, e);
+  EXPECT_EQ("llo", a);
+
+  b = a.end() - 2;
+  e = a.end();
+  a.erase(b, e);
+  EXPECT_EQ("l", a);
+
+  a = "      hello  ";
+  boost::algorithm::trim(a);
+  EXPECT_EQ(a, "hello");
 }
 
 TEST(StringPiece, split_step_char_delimiter) {
@@ -948,18 +980,22 @@ const size_t kPageSize = 4096;
 void createProtectedBuf(StringPiece& contents, char** buf) {
   ASSERT_LE(contents.size(), kPageSize);
   const size_t kSuccess = 0;
-  if (kSuccess != posix_memalign((void**)buf, kPageSize, 4 * kPageSize)) {
+  char* pageAlignedBuf = (char*)aligned_malloc(2 * kPageSize, kPageSize);
+  if (pageAlignedBuf == nullptr) {
     ASSERT_FALSE(true);
   }
-  mprotect(*buf + kPageSize, kPageSize, PROT_NONE);
+  // Protect the page after the first full page-aligned region of the
+  // malloc'ed buffer
+  mprotect(pageAlignedBuf + kPageSize, kPageSize, PROT_NONE);
   size_t newBegin = kPageSize - contents.size();
-  memcpy(*buf + newBegin, contents.data(), contents.size());
-  contents.reset(*buf + newBegin, contents.size());
+  memcpy(pageAlignedBuf + newBegin, contents.data(), contents.size());
+  contents.reset(pageAlignedBuf + newBegin, contents.size());
+  *buf = pageAlignedBuf;
 }
 
 void freeProtectedBuf(char* buf) {
   mprotect(buf + kPageSize, kPageSize, PROT_READ | PROT_WRITE);
-  free(buf);
+  aligned_free(buf);
 }
 
 TYPED_TEST(NeedleFinderTest, NoSegFault) {
@@ -1015,6 +1051,19 @@ TEST(NonConstTest, StringPiece) {
   }
 }
 
+// Similar to the begin() template functions, but instread of returing
+// an iterator, return a pointer to data.
+template <class Container>
+typename Container::value_type* dataPtr(Container& cont) {
+  // NOTE: &cont[0] is undefined if cont is empty (it creates a
+  // reference to nullptr - which is not dereferenced, but still UBSAN).
+  return cont.data();
+}
+template <class T, size_t N>
+constexpr T* dataPtr(T (&arr)[N]) noexcept {
+  return &arr[0];
+}
+
 template<class C>
 void testRangeFunc(C&& x, size_t n) {
   const auto& cx = x;
@@ -1023,8 +1072,8 @@ void testRangeFunc(C&& x, size_t n) {
   Range<const int*> r2 = range(std::forward<C>(x));
   Range<const int*> r3 = range(cx);
   Range<const int*> r5 = range(std::move(cx));
-  EXPECT_EQ(r1.begin(), &x[0]);
-  EXPECT_EQ(r1.end(), &x[n]);
+  EXPECT_EQ(r1.begin(), dataPtr(x));
+  EXPECT_EQ(r1.end(), dataPtr(x) + n);
   EXPECT_EQ(n, r1.size());
   EXPECT_EQ(n, r2.size());
   EXPECT_EQ(n, r3.size());

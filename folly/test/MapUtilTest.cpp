@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,11 +29,26 @@ TEST(MapUtil, get_default) {
   EXPECT_EQ(0, get_default(m, 3));
 }
 
+TEST(MapUtil, get_default_function) {
+  std::map<int, int> m;
+  m[1] = 2;
+  EXPECT_EQ(2, get_default(m, 1, [] { return 42; }));
+  EXPECT_EQ(42, get_default(m, 2, [] { return 42; }));
+  EXPECT_EQ(0, get_default(m, 3));
+}
+
 TEST(MapUtil, get_or_throw) {
   std::map<int, int> m;
   m[1] = 2;
   EXPECT_EQ(2, get_or_throw(m, 1));
   EXPECT_THROW(get_or_throw(m, 2), std::out_of_range);
+  EXPECT_EQ(&m[1], &get_or_throw(m, 1));
+  get_or_throw(m, 1) = 3;
+  EXPECT_EQ(3, get_or_throw(m, 1));
+  const auto& cm = m;
+  EXPECT_EQ(&m[1], &get_or_throw(cm, 1));
+  EXPECT_EQ(3, get_or_throw(cm, 1));
+  EXPECT_THROW(get_or_throw(cm, 2), std::out_of_range);
 }
 
 TEST(MapUtil, get_or_throw_specified) {
@@ -57,6 +72,19 @@ TEST(MapUtil, get_ref_default) {
   const int i = 42;
   EXPECT_EQ(2, get_ref_default(m, 1, i));
   EXPECT_EQ(42, get_ref_default(m, 2, i));
+  EXPECT_EQ(std::addressof(i), std::addressof(get_ref_default(m, 2, i)));
+}
+
+TEST(MapUtil, get_ref_default_function) {
+  std::map<int, int> m;
+  m[1] = 2;
+  const int i = 42;
+  EXPECT_EQ(2, get_ref_default(m, 1, [&i]() -> const int& { return i; }));
+  EXPECT_EQ(42, get_ref_default(m, 2, [&i]() -> const int& { return i; }));
+  EXPECT_EQ(
+      std::addressof(i),
+      std::addressof(
+          get_ref_default(m, 2, [&i]() -> const int& { return i; })));
 }
 
 TEST(MapUtil, get_ptr) {

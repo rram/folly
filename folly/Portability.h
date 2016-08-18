@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,46 +14,28 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_PORTABILITY_H_
-#define FOLLY_PORTABILITY_H_
+#pragma once
+
+#include <string.h>
 
 #include <cstddef>
 
-#ifndef FOLLY_NO_CONFIG
-#include <folly/folly-config.h>
-#endif
-
-#ifdef FOLLY_PLATFORM_CONFIG
-#include FOLLY_PLATFORM_CONFIG
-#endif
-
-#if FOLLY_HAVE_FEATURES_H
-#include <features.h>
-#endif
+#include <folly/portability/Config.h>
 
 #include <folly/CPortability.h>
 
-#ifdef __APPLE__
-# include <malloc/malloc.h>
-#endif
-
 #if FOLLY_HAVE_SCHED_H
  #include <sched.h>
- #ifndef FOLLY_HAVE_PTHREAD_YIELD
-  #define pthread_yield sched_yield
- #endif
 #endif
 
-// A change in folly/MemoryMapping.cpp uses MAP_ANONYMOUS, which is named
-// MAP_ANON on OSX/BSD.
-#if defined(__APPLE__) || defined(__FreeBSD__)
-  #include <sys/mman.h>
-  #ifndef MAP_ANONYMOUS
-    #ifdef MAP_ANON
-      #define MAP_ANONYMOUS MAP_ANON
-    #endif
-  #endif
+// Unaligned loads and stores
+namespace folly {
+#if FOLLY_HAVE_UNALIGNED_ACCESS
+constexpr bool kHasUnalignedAccess = true;
+#else
+constexpr bool kHasUnalignedAccess = false;
 #endif
+}
 
 // compiler specific attribute translation
 // msvc should come first, so if clang is in msvc mode it gets the right defines
@@ -92,15 +74,6 @@
 # define FOLLY_DEPRECATED(msg)
 #endif
 
-// noreturn
-#if defined(_MSC_VER)
-# define FOLLY_NORETURN __declspec(noreturn)
-#elif defined(__clang__) || defined(__GNUC__)
-# define FOLLY_NORETURN __attribute__((__noreturn__))
-#else
-# define FOLLY_NORETURN
-#endif
-
 // noinline
 #ifdef _MSC_VER
 # define FOLLY_NOINLINE __declspec(noinline)
@@ -116,7 +89,14 @@
 #elif defined(__clang__) || defined(__GNUC__)
 # define FOLLY_ALWAYS_INLINE inline __attribute__((__always_inline__))
 #else
-# define FOLLY_ALWAYS_INLINE
+# define FOLLY_ALWAYS_INLINE inline
+#endif
+
+// target
+#ifdef _MSC_VER
+# define FOLLY_TARGET_ATTRIBUTE(target)
+#else
+# define FOLLY_TARGET_ATTRIBUTE(target) __attribute__((__target__(target)))
 #endif
 
 // detection for 64 bit
@@ -132,6 +112,12 @@
 # define FOLLY_A64 0
 #endif
 
+#if defined (__powerpc64__)
+# define FOLLY_PPC64 1
+#else
+# define FOLLY_PPC64 0
+#endif
+
 // packing is very ugly in msvc
 #ifdef _MSC_VER
 # define FOLLY_PACK_ATTR /**/
@@ -145,6 +131,31 @@
 # define FOLLY_PACK_ATTR /**/
 # define FOLLY_PACK_PUSH /**/
 # define FOLLY_PACK_POP /**/
+#endif
+
+// Generalize warning push/pop.
+#if defined(_MSC_VER)
+# define FOLLY_PUSH_WARNING __pragma(warning(push))
+# define FOLLY_POP_WARNING __pragma(warning(pop))
+// Disable the GCC warnings.
+# define FOLLY_GCC_DISABLE_WARNING(warningName)
+# define FOLLY_MSVC_DISABLE_WARNING(warningNumber) __pragma(warning(disable: warningNumber))
+#elif defined(__clang__) || defined(__GNUC__)
+# define FOLLY_PUSH_WARNING _Pragma("GCC diagnostic push")
+# define FOLLY_POP_WARNING _Pragma("GCC diagnostic pop")
+#define FOLLY_GCC_DISABLE_WARNING_INTERNAL3(warningName) #warningName
+#define FOLLY_GCC_DISABLE_WARNING_INTERNAL2(warningName) \
+  FOLLY_GCC_DISABLE_WARNING_INTERNAL3(warningName)
+#define FOLLY_GCC_DISABLE_WARNING(warningName)                       \
+  _Pragma(FOLLY_GCC_DISABLE_WARNING_INTERNAL2(GCC diagnostic ignored \
+          FOLLY_GCC_DISABLE_WARNING_INTERNAL3(-W##warningName)))
+// Disable the MSVC warnings.
+# define FOLLY_MSVC_DISABLE_WARNING(warningNumber)
+#else
+# define FOLLY_PUSH_WARNING
+# define FOLLY_POP_WARNING
+# define FOLLY_GCC_DISABLE_WARNING(warningName)
+# define FOLLY_MSVC_DISABLE_WARNING(warningNumber)
 #endif
 
 // portable version check
@@ -166,18 +177,15 @@
 namespace std { typedef ::max_align_t max_align_t; }
 #endif
 
-/* Define macro wrappers for C++11's "final" and "override" keywords, which
- * are supported in gcc 4.7 but not gcc 4.6. */
-#if !defined(FOLLY_FINAL) && !defined(FOLLY_OVERRIDE)
-# if defined(__clang__) || __GNUC_PREREQ(4, 7)
-#  define FOLLY_FINAL final
-#  define FOLLY_OVERRIDE override
-# elif defined(_MSC_VER) && _MSC_VER >= 1600
-#  define FOLLY_FINAL final
-#  define FOLLY_OVERRIDE override
+// portable version check for clang
+#ifndef __CLANG_PREREQ
+# if defined __clang__ && defined __clang_major__ && defined __clang_minor__
+/* nolint */
+#  define __CLANG_PREREQ(maj, min) \
+    ((__clang_major__ << 16) + __clang_minor__ >= ((maj) << 16) + (min))
 # else
-#  define FOLLY_FINAL /**/
-#  define FOLLY_OVERRIDE /**/
+/* nolint */
+#  define __CLANG_PREREQ(maj, min) 0
 # endif
 #endif
 
@@ -195,18 +203,12 @@ namespace std { typedef ::max_align_t max_align_t; }
 # error cannot define platform specific thread local storage
 #endif
 
-// Define to 1 if you have the `preadv' and `pwritev' functions, respectively
-#if !defined(FOLLY_HAVE_PREADV) && !defined(FOLLY_HAVE_PWRITEV)
-# if defined(__GLIBC_PREREQ)
-#  if __GLIBC_PREREQ(2, 10)
-#   define FOLLY_HAVE_PREADV 1
-#   define FOLLY_HAVE_PWRITEV 1
-#  endif
-# endif
+#if FOLLY_MOBILE
+#undef FOLLY_TLS
 #endif
 
 // It turns out that GNU libstdc++ and LLVM libc++ differ on how they implement
-// the 'std' namespace; the latter uses inline namepsaces. Wrap this decision
+// the 'std' namespace; the latter uses inline namespaces. Wrap this decision
 // up in a macro to make forward-declarations easier.
 #if FOLLY_USE_LIBCPP
 #include <__config>
@@ -217,12 +219,14 @@ namespace std { typedef ::max_align_t max_align_t; }
 #define FOLLY_NAMESPACE_STD_END       }
 #endif
 
-// Some platforms lack clock_gettime(2) and clock_getres(2). Inject our own
-// versions of these into the global namespace.
-#if FOLLY_HAVE_CLOCK_GETTIME
-#include <time.h>
+// If the new c++ ABI is used, __cxx11 inline namespace needs to be added to
+// some types, e.g. std::list.
+#if _GLIBCXX_USE_CXX11_ABI
+# define FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN _GLIBCXX_BEGIN_NAMESPACE_CXX11
+# define FOLLY_GLIBCXX_NAMESPACE_CXX11_END   _GLIBCXX_END_NAMESPACE_CXX11
 #else
-#include <folly/detail/Clock.h>
+# define FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN
+# define FOLLY_GLIBCXX_NAMESPACE_CXX11_END
 #endif
 
 // Provide our own std::__throw_* wrappers for platforms that don't have them
@@ -257,18 +261,7 @@ namespace std { typedef ::max_align_t max_align_t; }
 // MSVC specific defines
 // mainly for posix compat
 #ifdef _MSC_VER
-
-// this definition is in a really silly place with a silly name
-// and ifdefing it every time we want it is painful
-#include <basetsd.h>
-typedef SSIZE_T ssize_t;
-
-// sprintf semantics are not exactly identical
-// but current usage is not a problem
-# define snprintf _snprintf
-
-// semantics here are identical
-# define strerror_r(errno,buf,len) strerror_s(buf,len,errno)
+#include <folly/portability/SysTypes.h>
 
 // compiler specific to compiler specific
 // nolint
@@ -277,12 +270,35 @@ typedef SSIZE_T ssize_t;
 // Hide a GCC specific thing that breaks MSVC if left alone.
 # define __extension__
 
-#ifdef _M_IX86_FP
-# define FOLLY_SSE _M_IX86_FP
-# define FOLLY_SSE_MINOR 0
-#endif
+// We have compiler support for the newest of the new, but
+// MSVC doesn't tell us that.
+#define __SSE4_2__ 1
 
 #endif
+
+// Debug
+namespace folly {
+#ifdef NDEBUG
+constexpr auto kIsDebug = false;
+#else
+constexpr auto kIsDebug = true;
+#endif
+}
+
+// Endianness
+namespace folly {
+#ifdef _MSC_VER
+// It's MSVC, so we just have to guess ... and allow an override
+#ifdef FOLLY_ENDIAN_BE
+constexpr auto kIsLittleEndian = false;
+#else
+constexpr auto kIsLittleEndian = true;
+#endif
+#else
+constexpr auto kIsLittleEndian = __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__;
+#endif
+constexpr auto kIsBigEndian = !kIsLittleEndian;
+}
 
 #ifndef FOLLY_SSE
 # if defined(__SSE4_2__)
@@ -309,6 +325,9 @@ typedef SSIZE_T ssize_t;
 # endif
 #endif
 
+#define FOLLY_SSE_PREREQ(major, minor) \
+  (FOLLY_SSE > major || FOLLY_SSE == major && FOLLY_SSE_MINOR >= minor)
+
 #if FOLLY_UNUSUAL_GFLAGS_NAMESPACE
 namespace FOLLY_GFLAGS_NAMESPACE { }
 namespace gflags {
@@ -321,52 +340,26 @@ using namespace FOLLY_GFLAGS_NAMESPACE;
 #include <TargetConditionals.h>
 #endif
 
-// MacOS doesn't have malloc_usable_size()
-#if defined(__APPLE__) && !defined(FOLLY_HAVE_MALLOC_USABLE_SIZE)
-inline size_t malloc_usable_size(void* ptr) {
-  return malloc_size(ptr);
-}
-#endif
-
 // RTTI may not be enabled for this compilation unit.
 #if defined(__GXX_RTTI) || defined(__cpp_rtti) || \
     (defined(_MSC_VER) && defined(_CPPRTTI))
 # define FOLLY_HAS_RTTI 1
 #endif
 
-#ifdef _MSC_VER
-# include <intrin.h>
+#if defined(__APPLE__) || defined(_MSC_VER)
+#define FOLLY_STATIC_CTOR_PRIORITY_MAX
+#else
+// 101 is the highest priority allowed by the init_priority attribute.
+// This priority is already used by JEMalloc and other memory allocators so
+// we will take the next one.
+#define FOLLY_STATIC_CTOR_PRIORITY_MAX __attribute__((__init_priority__(102)))
 #endif
 
 namespace folly {
 
-inline void asm_volatile_memory() {
-#if defined(__clang__) || defined(__GNUC__)
-  asm volatile("" : : : "memory");
-#elif defined(_MSC_VER)
-  ::_ReadWriteBarrier();
+#if defined(__linux__) && !FOLLY_MOBILE
+constexpr auto kIsLinux = true;
+#else
+constexpr auto kIsLinux = false;
 #endif
 }
-
-inline void asm_volatile_pause() {
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
-  ::_mm_pause();
-#elif defined(__i386__) || FOLLY_X64
-  asm volatile ("pause");
-#elif FOLLY_A64
-  asm volatile ("wfe");
-#endif
-}
-inline void asm_pause() {
-#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
-  ::_mm_pause();
-#elif defined(__i386__) || FOLLY_X64
-  asm ("pause");
-#elif FOLLY_A64
-  asm ("wfe");
-#endif
-}
-
-}
-
-#endif // FOLLY_PORTABILITY_H_

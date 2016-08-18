@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,17 +14,16 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_BATON_H
-#define FOLLY_BATON_H
+#pragma once
 
 #include <stdint.h>
 #include <atomic>
-#include <boost/noncopyable.hpp>
 #include <errno.h>
 #include <assert.h>
 
 #include <folly/detail/Futex.h>
 #include <folly/detail/MemoryIdler.h>
+#include <folly/portability/Asm.h>
 
 namespace folly {
 
@@ -44,8 +43,11 @@ namespace folly {
 /// a much more restrictive lifecycle we can also add a bunch of assertions
 /// that can help to catch race conditions ahead of time.
 template <template<typename> class Atom = std::atomic>
-struct Baton : boost::noncopyable {
-  Baton() : state_(INIT) {}
+struct Baton {
+  constexpr Baton() : state_(INIT) {}
+
+  Baton(Baton const&) = delete;
+  Baton& operator=(Baton const&) = delete;
 
   /// It is an error to destroy a Baton on which a thread is currently
   /// wait()ing.  In practice this means that the waiter usually takes
@@ -215,6 +217,13 @@ struct Baton : boost::noncopyable {
     }
   }
 
+  /// Similar to timed_wait, but with a duration.
+  template <typename Clock = std::chrono::steady_clock, typename Duration>
+  bool timed_wait(const Duration& duration) {
+    auto deadline = Clock::now() + duration;
+    return timed_wait(deadline);
+  }
+
   /// Similar to wait, but doesn't block the thread if it hasn't been posted.
   ///
   /// try_wait has the following semantics:
@@ -287,5 +296,3 @@ struct Baton : boost::noncopyable {
 };
 
 } // namespace folly
-
-#endif

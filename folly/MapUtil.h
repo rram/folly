@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_MAPUTIL_H_
-#define FOLLY_MAPUTIL_H_
+#pragma once
 
 #include <folly/Conv.h>
 #include <folly/Optional.h>
@@ -36,12 +35,41 @@ typename Map::mapped_type get_default(
 }
 
 /**
+ * Give a map and a key, return the value corresponding to the key in the map,
+ * or a given default value if the key doesn't exist in the map.
+ */
+template <
+    class Map,
+    typename Func,
+    typename = typename std::enable_if<std::is_convertible<
+        typename std::result_of<Func()>::type,
+        typename Map::mapped_type>::value>::type>
+typename Map::mapped_type
+get_default(const Map& map, const typename Map::key_type& key, Func&& dflt) {
+  auto pos = map.find(key);
+  return pos != map.end() ? pos->second : dflt();
+}
+
+/**
  * Given a map and a key, return the value corresponding to the key in the map,
  * or throw an exception of the specified type.
  */
 template <class E = std::out_of_range, class Map>
-typename Map::mapped_type get_or_throw(
-    const Map& map, const typename Map::key_type& key,
+const typename Map::mapped_type& get_or_throw(
+    const Map& map,
+    const typename Map::key_type& key,
+    const std::string& exceptionStrPrefix = std::string()) {
+  auto pos = map.find(key);
+  if (pos != map.end()) {
+    return pos->second;
+  }
+  throw E(folly::to<std::string>(exceptionStrPrefix, key));
+}
+
+template <class E = std::out_of_range, class Map>
+typename Map::mapped_type& get_or_throw(
+    Map& map,
+    const typename Map::key_type& key,
     const std::string& exceptionStrPrefix = std::string()) {
   auto pos = map.find(key);
   if (pos != map.end()) {
@@ -79,6 +107,25 @@ const typename Map::mapped_type& get_ref_default(
 }
 
 /**
+ * Given a map and a key, return a reference to the value corresponding to the
+ * key in the map, or the given default reference if the key doesn't exist in
+ * the map.
+ */
+template <
+    class Map,
+    typename Func,
+    typename = typename std::enable_if<std::is_convertible<
+        typename std::result_of<Func()>::type,
+        const typename Map::mapped_type&>::value>::type>
+const typename Map::mapped_type& get_ref_default(
+    const Map& map,
+    const typename Map::key_type& key,
+    Func&& dflt) {
+  auto pos = map.find(key);
+  return (pos != map.end() ? pos->second : dflt());
+}
+
+/**
  * Given a map and a key, return a pointer to the value corresponding to the
  * key in the map, or nullptr if the key doesn't exist in the map.
  */
@@ -100,5 +147,3 @@ typename Map::mapped_type* get_ptr(
 }
 
 }  // namespace folly
-
-#endif /* FOLLY_MAPUTIL_H_ */

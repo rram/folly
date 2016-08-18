@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@
 
 #include <folly/FileUtil.h>
 #include <folly/detail/FileUtilDetail.h>
+#include <folly/experimental/TestUtil.h>
 
 #include <deque>
 
 #include <glog/logging.h>
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
-#include <folly/Benchmark.h>
+#include <folly/File.h>
 #include <folly/Range.h>
 #include <folly/String.h>
 
@@ -83,7 +83,7 @@ ssize_t Reader::nextSize() {
   return n;
 }
 
-ssize_t Reader::operator()(int fd, void* buf, size_t count) {
+ssize_t Reader::operator()(int /* fd */, void* buf, size_t count) {
   ssize_t n = nextSize();
   if (n <= 0) {
     return n;
@@ -101,7 +101,7 @@ ssize_t Reader::operator()(int fd, void* buf, size_t count, off_t offset) {
   return operator()(fd, buf, count);
 }
 
-ssize_t Reader::operator()(int fd, const iovec* iov, int count) {
+ssize_t Reader::operator()(int /* fd */, const iovec* iov, int count) {
   ssize_t n = nextSize();
   if (n <= 0) {
     return n;
@@ -160,7 +160,7 @@ TEST_F(FileUtilTest, read) {
   for (auto& p : readers_) {
     std::string out(in_.size(), '\0');
     EXPECT_EQ(p.first, wrapFull(p.second, 0, &out[0], out.size()));
-    if (p.first != (typeof(p.first))(-1)) {
+    if (p.first != (decltype(p.first))(-1)) {
       EXPECT_EQ(in_.substr(0, p.first), out.substr(0, p.first));
     }
   }
@@ -170,7 +170,7 @@ TEST_F(FileUtilTest, pread) {
   for (auto& p : readers_) {
     std::string out(in_.size(), '\0');
     EXPECT_EQ(p.first, wrapFull(p.second, 0, &out[0], out.size(), off_t(42)));
-    if (p.first != (typeof(p.first))(-1)) {
+    if (p.first != (decltype(p.first))(-1)) {
       EXPECT_EQ(in_.substr(0, p.first), out.substr(0, p.first));
     }
   }
@@ -179,6 +179,7 @@ TEST_F(FileUtilTest, pread) {
 class IovecBuffers {
  public:
   explicit IovecBuffers(std::initializer_list<size_t> sizes);
+  explicit IovecBuffers(std::vector<size_t> sizes);
 
   std::vector<iovec> iov() const { return iov_; }  // yes, make a copy
   std::string join() const { return folly::join("", buffers_); }
@@ -192,6 +193,19 @@ class IovecBuffers {
 IovecBuffers::IovecBuffers(std::initializer_list<size_t> sizes) {
   iov_.reserve(sizes.size());
   for (auto& s : sizes) {
+    buffers_.push_back(std::string(s, '\0'));
+  }
+  for (auto& b : buffers_) {
+    iovec iov;
+    iov.iov_base = &b[0];
+    iov.iov_len = b.size();
+    iov_.push_back(iov);
+  }
+}
+
+IovecBuffers::IovecBuffers(std::vector<size_t> sizes) {
+  iov_.reserve(sizes.size());
+  for (auto s : sizes) {
     buffers_.push_back(std::string(s, '\0'));
   }
   for (auto& b : buffers_) {
@@ -217,13 +231,26 @@ TEST_F(FileUtilTest, readv) {
 
     auto iov = buf.iov();
     EXPECT_EQ(p.first, wrapvFull(p.second, 0, iov.data(), iov.size()));
-    if (p.first != (typeof(p.first))(-1)) {
+    if (p.first != (decltype(p.first))(-1)) {
       EXPECT_EQ(in_.substr(0, p.first), buf.join().substr(0, p.first));
     }
   }
 }
 
-#if FOLLY_HAVE_PREADV
+TEST(FileUtilTest2, wrapv) {
+  TemporaryFile tempFile("file-util-test");
+  std::vector<size_t> sizes;
+  size_t sum = 0;
+  for (int32_t i = 0; i < 1500; ++i) {
+    sizes.push_back(i % 3 + 1);
+    sum += sizes.back();
+  }
+  IovecBuffers buf(sizes);
+  ASSERT_EQ(sum, buf.size());
+  auto iov = buf.iov();
+  EXPECT_EQ(sum, wrapvFull(writev, tempFile.fd(), iov.data(), iov.size()));
+}
+
 TEST_F(FileUtilTest, preadv) {
   for (auto& p : readers_) {
     IovecBuffers buf({12, 19, 31});
@@ -232,24 +259,16 @@ TEST_F(FileUtilTest, preadv) {
     auto iov = buf.iov();
     EXPECT_EQ(p.first,
               wrapvFull(p.second, 0, iov.data(), iov.size(), off_t(42)));
-    if (p.first != (typeof(p.first))(-1)) {
+    if (p.first != (decltype(p.first))(-1)) {
       EXPECT_EQ(in_.substr(0, p.first), buf.join().substr(0, p.first));
     }
   }
 }
-#endif
 
 TEST(String, readFile) {
-  srand(time(nullptr));
-  const string tmpPrefix = to<string>("/tmp/folly-file-util-test-",
-                                      getpid(), "-", rand(), "-");
-  const string afile = tmpPrefix + "myfile";
-  const string emptyFile = tmpPrefix + "myfile2";
-
-  SCOPE_EXIT {
-    unlink(afile.c_str());
-    unlink(emptyFile.c_str());
-  };
+  const TemporaryFile afileTemp, emptyFileTemp;
+  auto afile = afileTemp.path().string();
+  auto emptyFile = emptyFileTemp.path().string();
 
   EXPECT_TRUE(writeFile(string(), emptyFile.c_str()));
   EXPECT_TRUE(writeFile(StringPiece("bar"), afile.c_str()));
@@ -278,10 +297,45 @@ TEST(String, readFile) {
   }
 }
 
-}}  // namespaces
+class ReadFileFd : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    ASSERT_TRUE(writeFile(StringPiece("bar"), aFile.path().string().c_str()));
+  }
 
-int main(int argc, char *argv[]) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
+  TemporaryFile aFile;
+};
+
+TEST_F(ReadFileFd, ReadZeroBytes) {
+  std::string contents;
+  EXPECT_TRUE(readFile(aFile.fd(), contents, 0));
+  EXPECT_EQ("", contents);
 }
+
+TEST_F(ReadFileFd, ReadPartial) {
+  std::string contents;
+  EXPECT_TRUE(readFile(aFile.fd(), contents, 2));
+  EXPECT_EQ("ba", contents);
+}
+
+TEST_F(ReadFileFd, ReadFull) {
+  std::string contents;
+  EXPECT_TRUE(readFile(aFile.fd(), contents));
+  EXPECT_EQ("bar", contents);
+}
+
+TEST_F(ReadFileFd, WriteOnlyFd) {
+  File f(aFile.path().string(), O_WRONLY);
+  std::string contents;
+  EXPECT_FALSE(readFile(f.fd(), contents));
+  PLOG(INFO);
+}
+
+TEST_F(ReadFileFd, InvalidFd) {
+  File f(aFile.path().string());
+  f.close();
+  std::string contents;
+  EXPECT_FALSE(readFile(f.fd(), contents));
+  PLOG(INFO);
+}
+}}  // namespaces

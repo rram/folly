@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,10 @@
 
 #if FOLLY_HAVE_LIBLZMA
 #include <lzma.h>
+#endif
+
+#if FOLLY_HAVE_LIBZSTD
+#include <zstd.h>
 #endif
 
 #include <folly/Conv.h>
@@ -101,16 +105,16 @@ namespace {
 /**
  * No compression
  */
-class NoCompressionCodec FOLLY_FINAL : public Codec {
+class NoCompressionCodec final : public Codec {
  public:
   static std::unique_ptr<Codec> create(int level, CodecType type);
   explicit NoCompressionCodec(int level, CodecType type);
 
  private:
-  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) FOLLY_OVERRIDE;
+  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) override;
   std::unique_ptr<IOBuf> doUncompress(
       const IOBuf* data,
-      uint64_t uncompressedLength) FOLLY_OVERRIDE;
+      uint64_t uncompressedLength) override;
 };
 
 std::unique_ptr<Codec> NoCompressionCodec::create(int level, CodecType type) {
@@ -182,21 +186,21 @@ inline uint64_t decodeVarintFromCursor(folly::io::Cursor& cursor) {
 /**
  * LZ4 compression
  */
-class LZ4Codec FOLLY_FINAL : public Codec {
+class LZ4Codec final : public Codec {
  public:
   static std::unique_ptr<Codec> create(int level, CodecType type);
   explicit LZ4Codec(int level, CodecType type);
 
  private:
-  bool doNeedsUncompressedLength() const FOLLY_OVERRIDE;
-  uint64_t doMaxUncompressedLength() const FOLLY_OVERRIDE;
+  bool doNeedsUncompressedLength() const override;
+  uint64_t doMaxUncompressedLength() const override;
 
   bool encodeSize() const { return type() == CodecType::LZ4_VARINT_SIZE; }
 
-  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) FOLLY_OVERRIDE;
+  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) override;
   std::unique_ptr<IOBuf> doUncompress(
       const IOBuf* data,
-      uint64_t uncompressedLength) FOLLY_OVERRIDE;
+      uint64_t uncompressedLength) override;
 
   bool highCompression_;
 };
@@ -299,12 +303,13 @@ std::unique_ptr<IOBuf> LZ4Codec::doUncompress(
     }
   }
 
-  auto p = cursor.peek();
+  auto sp = StringPiece{cursor.peekBytes()};
   auto out = IOBuf::create(actualUncompressedLength);
-  int n = LZ4_decompress_safe(reinterpret_cast<const char*>(p.first),
-                              reinterpret_cast<char*>(out->writableTail()),
-                              p.second,
-                              actualUncompressedLength);
+  int n = LZ4_decompress_safe(
+      sp.data(),
+      reinterpret_cast<char*>(out->writableTail()),
+      sp.size(),
+      actualUncompressedLength);
 
   if (n < 0 || uint64_t(n) != actualUncompressedLength) {
     throw std::runtime_error(to<std::string>(
@@ -325,12 +330,12 @@ std::unique_ptr<IOBuf> LZ4Codec::doUncompress(
 /**
  * Implementation of snappy::Source that reads from a IOBuf chain.
  */
-class IOBufSnappySource FOLLY_FINAL : public snappy::Source {
+class IOBufSnappySource final : public snappy::Source {
  public:
   explicit IOBufSnappySource(const IOBuf* data);
-  size_t Available() const FOLLY_OVERRIDE;
-  const char* Peek(size_t* len) FOLLY_OVERRIDE;
-  void Skip(size_t n) FOLLY_OVERRIDE;
+  size_t Available() const override;
+  const char* Peek(size_t* len) override;
+  void Skip(size_t n) override;
  private:
   size_t available_;
   io::Cursor cursor_;
@@ -346,9 +351,9 @@ size_t IOBufSnappySource::Available() const {
 }
 
 const char* IOBufSnappySource::Peek(size_t* len) {
-  auto p = cursor_.peek();
-  *len = p.second;
-  return reinterpret_cast<const char*>(p.first);
+  auto sp = StringPiece{cursor_.peekBytes()};
+  *len = sp.size();
+  return sp.data();
 }
 
 void IOBufSnappySource::Skip(size_t n) {
@@ -357,17 +362,17 @@ void IOBufSnappySource::Skip(size_t n) {
   available_ -= n;
 }
 
-class SnappyCodec FOLLY_FINAL : public Codec {
+class SnappyCodec final : public Codec {
  public:
   static std::unique_ptr<Codec> create(int level, CodecType type);
   explicit SnappyCodec(int level, CodecType type);
 
  private:
-  uint64_t doMaxUncompressedLength() const FOLLY_OVERRIDE;
-  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) FOLLY_OVERRIDE;
+  uint64_t doMaxUncompressedLength() const override;
+  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) override;
   std::unique_ptr<IOBuf> doUncompress(
       const IOBuf* data,
-      uint64_t uncompressedLength) FOLLY_OVERRIDE;
+      uint64_t uncompressedLength) override;
 };
 
 std::unique_ptr<Codec> SnappyCodec::create(int level, CodecType type) {
@@ -443,16 +448,16 @@ std::unique_ptr<IOBuf> SnappyCodec::doUncompress(const IOBuf* data,
 /**
  * Zlib codec
  */
-class ZlibCodec FOLLY_FINAL : public Codec {
+class ZlibCodec final : public Codec {
  public:
   static std::unique_ptr<Codec> create(int level, CodecType type);
   explicit ZlibCodec(int level, CodecType type);
 
  private:
-  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) FOLLY_OVERRIDE;
+  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) override;
   std::unique_ptr<IOBuf> doUncompress(
       const IOBuf* data,
-      uint64_t uncompressedLength) FOLLY_OVERRIDE;
+      uint64_t uncompressedLength) override;
 
   std::unique_ptr<IOBuf> addOutputBuffer(z_stream* stream, uint32_t length);
   bool doInflate(z_stream* stream, IOBuf* head, uint32_t bufferLength);
@@ -465,7 +470,7 @@ std::unique_ptr<Codec> ZlibCodec::create(int level, CodecType type) {
 }
 
 ZlibCodec::ZlibCodec(int level, CodecType type) : Codec(type) {
-  DCHECK(type == CodecType::ZLIB);
+  DCHECK(type == CodecType::ZLIB || type == CodecType::GZIP);
   switch (level) {
   case COMPRESSION_LEVEL_FASTEST:
     level = 1;
@@ -530,7 +535,22 @@ std::unique_ptr<IOBuf> ZlibCodec::doCompress(const IOBuf* data) {
   stream.zfree = nullptr;
   stream.opaque = nullptr;
 
-  int rc = deflateInit(&stream, level_);
+  // Using deflateInit2() to support gzip.  "The windowBits parameter is the
+  // base two logarithm of the maximum window size (...) The default value is
+  // 15 (...) Add 16 to windowBits to write a simple gzip header and trailer
+  // around the compressed data instead of a zlib wrapper. The gzip header
+  // will have no file name, no extra data, no comment, no modification time
+  // (set to zero), no header crc, and the operating system will be set to 255
+  // (unknown)."
+  int windowBits = 15 + (type() == CodecType::GZIP ? 16 : 0);
+  // All other parameters (method, memLevel, strategy) get default values from
+  // the zlib manual.
+  int rc = deflateInit2(&stream,
+                        level_,
+                        Z_DEFLATED,
+                        windowBits,
+                        /* memLevel */ 8,
+                        Z_DEFAULT_STRATEGY);
   if (rc != Z_OK) {
     throw std::runtime_error(to<std::string>(
         "ZlibCodec: deflateInit error: ", rc, ": ", stream.msg));
@@ -610,7 +630,11 @@ std::unique_ptr<IOBuf> ZlibCodec::doUncompress(const IOBuf* data,
   stream.zfree = nullptr;
   stream.opaque = nullptr;
 
-  int rc = inflateInit(&stream);
+  // "The windowBits parameter is the base two logarithm of the maximum window
+  // size (...) The default value is 15 (...) add 16 to decode only the gzip
+  // format (the zlib format will return a Z_DATA_ERROR)."
+  int windowBits = 15 + (type() == CodecType::GZIP ? 16 : 0);
+  int rc = inflateInit2(&stream, windowBits);
   if (rc != Z_OK) {
     throw std::runtime_error(to<std::string>(
         "ZlibCodec: inflateInit error: ", rc, ": ", stream.msg));
@@ -684,21 +708,21 @@ std::unique_ptr<IOBuf> ZlibCodec::doUncompress(const IOBuf* data,
 /**
  * LZMA2 compression
  */
-class LZMA2Codec FOLLY_FINAL : public Codec {
+class LZMA2Codec final : public Codec {
  public:
   static std::unique_ptr<Codec> create(int level, CodecType type);
   explicit LZMA2Codec(int level, CodecType type);
 
  private:
-  bool doNeedsUncompressedLength() const FOLLY_OVERRIDE;
-  uint64_t doMaxUncompressedLength() const FOLLY_OVERRIDE;
+  bool doNeedsUncompressedLength() const override;
+  uint64_t doMaxUncompressedLength() const override;
 
   bool encodeSize() const { return type() == CodecType::LZMA2_VARINT_SIZE; }
 
-  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) FOLLY_OVERRIDE;
+  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) override;
   std::unique_ptr<IOBuf> doUncompress(
       const IOBuf* data,
-      uint64_t uncompressedLength) FOLLY_OVERRIDE;
+      uint64_t uncompressedLength) override;
 
   std::unique_ptr<IOBuf> addOutputBuffer(lzma_stream* stream, size_t length);
   bool doInflate(lzma_stream* stream, IOBuf* head, size_t bufferLength);
@@ -885,10 +909,10 @@ std::unique_ptr<IOBuf> LZMA2Codec::doUncompress(const IOBuf* data,
        defaultBufferLength));
 
   bool streamEnd = false;
-  auto buf = cursor.peek();
-  while (buf.second != 0) {
-    stream.next_in = const_cast<uint8_t*>(buf.first);
-    stream.avail_in = buf.second;
+  auto buf = cursor.peekBytes();
+  while (!buf.empty()) {
+    stream.next_in = const_cast<uint8_t*>(buf.data());
+    stream.avail_in = buf.size();
 
     while (stream.avail_in != 0) {
       if (streamEnd) {
@@ -899,8 +923,8 @@ std::unique_ptr<IOBuf> LZMA2Codec::doUncompress(const IOBuf* data,
       streamEnd = doInflate(&stream, out.get(), defaultBufferLength);
     }
 
-    cursor.skip(buf.second);
-    buf = cursor.peek();
+    cursor.skip(buf.size());
+    buf = cursor.peekBytes();
   }
 
   while (!streamEnd) {
@@ -918,6 +942,99 @@ std::unique_ptr<IOBuf> LZMA2Codec::doUncompress(const IOBuf* data,
 }
 
 #endif  // FOLLY_HAVE_LIBLZMA
+
+#ifdef FOLLY_HAVE_LIBZSTD
+
+/**
+ * ZSTD_BETA compression
+ */
+class ZSTDCodec final : public Codec {
+ public:
+  static std::unique_ptr<Codec> create(int level, CodecType);
+  explicit ZSTDCodec(int level, CodecType type);
+
+ private:
+  bool doNeedsUncompressedLength() const override;
+  std::unique_ptr<IOBuf> doCompress(const IOBuf* data) override;
+  std::unique_ptr<IOBuf> doUncompress(
+      const IOBuf* data,
+      uint64_t uncompressedLength) override;
+
+  int level_{1};
+};
+
+std::unique_ptr<Codec> ZSTDCodec::create(int level, CodecType type) {
+  return make_unique<ZSTDCodec>(level, type);
+}
+
+ZSTDCodec::ZSTDCodec(int level, CodecType type) : Codec(type) {
+  DCHECK(type == CodecType::ZSTD_BETA);
+  switch (level) {
+    case COMPRESSION_LEVEL_FASTEST:
+      level_ = 1;
+      break;
+    case COMPRESSION_LEVEL_DEFAULT:
+      level_ = 1;
+      break;
+    case COMPRESSION_LEVEL_BEST:
+      level_ = 19;
+      break;
+  }
+}
+
+bool ZSTDCodec::doNeedsUncompressedLength() const {
+  return true;
+}
+
+std::unique_ptr<IOBuf> ZSTDCodec::doCompress(const IOBuf* data) {
+  size_t rc;
+  size_t maxCompressedLength = ZSTD_compressBound(data->length());
+  auto out = IOBuf::createCombined(maxCompressedLength);
+
+  CHECK_EQ(out->length(), 0);
+
+  rc = ZSTD_compress(out->writableTail(),
+                     out->capacity(),
+                     data->data(),
+                     data->length(),
+                     level_);
+
+  if (ZSTD_isError(rc)) {
+    throw std::runtime_error(to<std::string>(
+          "ZSTD compression returned an error: ",
+          ZSTD_getErrorName(rc)));
+  }
+
+  out->append(rc);
+  CHECK_EQ(out->length(), rc);
+
+  return out;
+}
+
+std::unique_ptr<IOBuf> ZSTDCodec::doUncompress(const IOBuf* data,
+                                               uint64_t uncompressedLength) {
+  size_t rc;
+  auto out = IOBuf::createCombined(uncompressedLength);
+
+  CHECK_GE(out->capacity(), uncompressedLength);
+  CHECK_EQ(out->length(), 0);
+
+  rc = ZSTD_decompress(
+      out->writableTail(), out->capacity(), data->data(), data->length());
+
+  if (ZSTD_isError(rc)) {
+    throw std::runtime_error(to<std::string>(
+          "ZSTD decompression returned an error: ",
+          ZSTD_getErrorName(rc)));
+  }
+
+  out->append(rc);
+  CHECK_EQ(out->length(), rc);
+
+  return out;
+}
+
+#endif  // FOLLY_HAVE_LIBZSTD
 
 }  // namespace
 
@@ -958,6 +1075,18 @@ std::unique_ptr<Codec> getCodec(CodecType type, int level) {
     LZMA2Codec::create,
 #else
     nullptr,
+    nullptr,
+#endif
+
+#if FOLLY_HAVE_LIBZSTD
+    ZSTDCodec::create,
+#else
+    nullptr,
+#endif
+
+#if FOLLY_HAVE_LIBZ
+    ZlibCodec::create,
+#else
     nullptr,
 #endif
   };

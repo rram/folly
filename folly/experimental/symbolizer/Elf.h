@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 // ELF file parser
 
-#ifndef FOLLY_EXPERIMENTAL_SYMBOLIZER_ELF_H_
+#pragma once
 #define FOLLY_EXPERIMENTAL_SYMBOLIZER_ELF_H_
 
 #include <stdio.h>
@@ -241,5 +241,3 @@ class ElfFile {
 }  // namespace folly
 
 #include <folly/experimental/symbolizer/Elf-inl.h>
-
-#endif /* FOLLY_EXPERIMENTAL_SYMBOLIZER_ELF_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@
 
 #include <folly/Range.h>
 #include <folly/Benchmark.h>
+#include <folly/Portability.h>
 
 using namespace folly;
 
@@ -94,8 +95,7 @@ void ArenaTester::merge(ArenaTester&& other) {
 }  // namespace
 
 TEST(ThreadCachedArena, BlockSize) {
-  struct Align { char c; } __attribute__((__aligned__));
-  static const size_t alignment = alignof(Align);
+  static const size_t alignment = alignof(std::max_align_t);
   static const size_t requestedBlockSize = 64;
 
   ThreadCachedArena arena(requestedBlockSize);
@@ -119,9 +119,13 @@ TEST(ThreadCachedArena, BlockSize) {
 TEST(ThreadCachedArena, SingleThreaded) {
   static const size_t requestedBlockSize = 64;
   ThreadCachedArena arena(requestedBlockSize);
+  EXPECT_EQ(arena.totalSize(), sizeof(ThreadCachedArena));
+
   ArenaTester tester(arena);
   tester.allocate(100, 100 << 10);
   tester.verify();
+
+  EXPECT_GT(arena.totalSize(), sizeof(ThreadCachedArena));
 }
 
 TEST(ThreadCachedArena, MultiThreaded) {

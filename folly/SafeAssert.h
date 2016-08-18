@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_SAFEASSERT_H_
-#define FOLLY_SAFEASSERT_H_
+#pragma once
 
 #include <folly/Portability.h>
 #include <folly/Preprocessor.h>
@@ -43,10 +42,10 @@
 
 namespace folly { namespace detail {
 
-FOLLY_NORETURN void assertionFailure(const char* expr, const char* msg,
-                      const char* file, unsigned int line,
-                      const char* function);
-
+[[noreturn]] void assertionFailure(
+    const char* expr,
+    const char* msg,
+    const char* file,
+    unsigned int line,
+    const char* function);
 }}  // namespace folly
-
-#endif /* FOLLY_SAFEASSERT_H_ */

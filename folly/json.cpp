@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,11 @@
 #include <boost/algorithm/string.hpp>
 
 #include <folly/Conv.h>
+#include <folly/Portability.h>
 #include <folly/Range.h>
 #include <folly/String.h>
 #include <folly/Unicode.h>
+#include <folly/portability/Constexpr.h>
 
 namespace folly {
 
@@ -116,13 +118,11 @@ char32_t decodeUtf8(
 }
 
 struct Printer {
-  explicit Printer(fbstring& out,
-                   unsigned* indentLevel,
-                   serialization_opts const* opts)
-    : out_(out)
-    , indentLevel_(indentLevel)
-    , opts_(*opts)
-  {}
+  explicit Printer(
+      std::string& out,
+      unsigned* indentLevel,
+      serialization_opts const* opts)
+      : out_(out), indentLevel_(indentLevel), opts_(*opts) {}
 
   void operator()(dynamic const& v) const {
     switch (v.type()) {
@@ -242,7 +242,7 @@ private:
 
   void newline() const {
     if (indentLevel_) {
-      out_ += to<fbstring>('\n', fbstring(*indentLevel_ * 2, ' '));
+      out_ += to<std::string>('\n', std::string(*indentLevel_ * 2, ' '));
     }
   }
 
@@ -251,9 +251,9 @@ private:
   }
 
 private:
-  fbstring& out_;
-  unsigned* const indentLevel_;
-  serialization_opts const& opts_;
+ std::string& out_;
+ unsigned* const indentLevel_;
+ serialization_opts const& opts_;
 };
 
   //////////////////////////////////////////////////////////////////////
@@ -379,7 +379,18 @@ struct Input {
     return opts_;
   }
 
-private:
+  void incrementRecursionLevel() {
+    if (currentRecursionLevel_ > opts_.recursion_limit) {
+      error("recursion limit exceeded");
+    }
+    currentRecursionLevel_++;
+  }
+
+  void decrementRecursionLevel() {
+    currentRecursionLevel_--;
+  }
+
+ private:
   void storeCurrent() {
     current_ = range_.empty() ? EOF : range_.front();
   }
@@ -389,10 +400,25 @@ private:
   json::serialization_opts const& opts_;
   unsigned lineNum_;
   int current_;
+  unsigned int currentRecursionLevel_{0};
+};
+
+class RecursionGuard {
+ public:
+  explicit RecursionGuard(Input& in) : in_(in) {
+    in_.incrementRecursionLevel();
+  }
+
+  ~RecursionGuard() {
+    in_.decrementRecursionLevel();
+  }
+
+ private:
+  Input& in_;
 };
 
 dynamic parseValue(Input& in);
-fbstring parseString(Input& in);
+std::string parseString(Input& in);
 dynamic parseNumber(Input& in);
 
 dynamic parseObject(Input& in) {
@@ -443,7 +469,7 @@ dynamic parseArray(Input& in) {
   assert(*in == '[');
   ++in;
 
-  dynamic ret = {};
+  dynamic ret = dynamic::array;
 
   in.skipWhitespace();
   if (*in == ']') {
@@ -470,8 +496,10 @@ dynamic parseArray(Input& in) {
 
 dynamic parseNumber(Input& in) {
   bool const negative = (*in == '-');
-  if (negative) {
-    if (in.consume("-Infinity")) {
+  if (negative && in.consume("-Infinity")) {
+    if (in.getOpts().parse_numbers_as_strings) {
+      return "-Infinity";
+    } else {
       return -std::numeric_limits<double>::infinity();
     }
   }
@@ -482,10 +510,28 @@ dynamic parseNumber(Input& in) {
   }
 
   auto const wasE = *in == 'e' || *in == 'E';
+
+  constexpr const char* maxInt = "9223372036854775807";
+  constexpr const char* minInt = "-9223372036854775808";
+  constexpr auto maxIntLen = constexpr_strlen(maxInt);
+  constexpr auto minIntLen = constexpr_strlen(minInt);
+
+  if (*in != '.' && !wasE && in.getOpts().parse_numbers_as_strings) {
+    return integral;
+  }
+
   if (*in != '.' && !wasE) {
-    auto val = to<int64_t>(integral);
-    in.skipWhitespace();
-    return val;
+    if (LIKELY(!in.getOpts().double_fallback || integral.size() < maxIntLen) ||
+        (!negative && integral.size() == maxIntLen && integral <= maxInt) ||
+        (negative && integral.size() == minIntLen && integral <= minInt)) {
+      auto val = to<int64_t>(integral);
+      in.skipWhitespace();
+      return val;
+    } else {
+      auto val = to<double>(integral);
+      in.skipWhitespace();
+      return val;
+    }
   }
 
   auto end = !wasE ? (++in, in.skipDigits().end()) : in.begin();
@@ -498,12 +544,14 @@ dynamic parseNumber(Input& in) {
     end = expPart.end();
   }
   auto fullNum = range(integral.begin(), end);
-
+  if (in.getOpts().parse_numbers_as_strings) {
+    return fullNum;
+  }
   auto val = to<double>(fullNum);
   return val;
 }
 
-fbstring decodeUnicodeEscape(Input& in) {
+std::string decodeUnicodeEscape(Input& in) {
   auto hexVal = [&] (char c) -> unsigned {
     return c >= '0' && c <= '9' ? c - '0' :
            c >= 'a' && c <= 'f' ? c - 'a' + 10 :
@@ -551,11 +599,11 @@ fbstring decodeUnicodeEscape(Input& in) {
   return codePointToUtf8(codePoint);
 }
 
-fbstring parseString(Input& in) {
+std::string parseString(Input& in) {
   assert(*in == '\"');
   ++in;
 
-  fbstring ret;
+  std::string ret;
   for (;;) {
     auto range = in.skipWhile(
       [] (char c) { return c != '\"' && c != '\\'; }
@@ -578,8 +626,8 @@ fbstring parseString(Input& in) {
       case 'r':     ret.push_back('\r'); ++in; break;
       case 't':     ret.push_back('\t'); ++in; break;
       case 'u':     ++in; ret += decodeUnicodeEscape(in); break;
-      default:      in.error(to<fbstring>("unknown escape ", *in,
-                                          " in string").c_str());
+      default:
+        in.error(to<std::string>("unknown escape ", *in, " in string").c_str());
       }
       continue;
     }
@@ -605,6 +653,8 @@ fbstring parseString(Input& in) {
 }
 
 dynamic parseValue(Input& in) {
+  RecursionGuard guard(in);
+
   in.skipWhitespace();
   return *in == '[' ? parseArray(in) :
          *in == '{' ? parseObject(in) :
@@ -613,8 +663,12 @@ dynamic parseValue(Input& in) {
          in.consume("true") ? true :
          in.consume("false") ? false :
          in.consume("null") ? nullptr :
-         in.consume("Infinity") ? std::numeric_limits<double>::infinity() :
-         in.consume("NaN") ? std::numeric_limits<double>::quiet_NaN() :
+         in.consume("Infinity") ?
+          (in.getOpts().parse_numbers_as_strings ? (dynamic)"Infinity" :
+            (dynamic)std::numeric_limits<double>::infinity()) :
+         in.consume("NaN") ?
+           (in.getOpts().parse_numbers_as_strings ? (dynamic)"NaN" :
+             (dynamic)std::numeric_limits<double>::quiet_NaN()) :
          in.error("expected json value");
 }
 
@@ -622,8 +676,8 @@ dynamic parseValue(Input& in) {
 
 //////////////////////////////////////////////////////////////////////
 
-fbstring serialize(dynamic const& dyn, serialization_opts const& opts) {
-  fbstring ret;
+std::string serialize(dynamic const& dyn, serialization_opts const& opts) {
+  std::string ret;
   unsigned indentLevel = 0;
   Printer p(ret, opts.pretty_formatting ? &indentLevel : nullptr, &opts);
   p(dyn);
@@ -631,9 +685,10 @@ fbstring serialize(dynamic const& dyn, serialization_opts const& opts) {
 }
 
 // Escape a string so that it is legal to print it in JSON text.
-void escapeString(StringPiece input,
-                  fbstring& out,
-                  const serialization_opts& opts) {
+void escapeString(
+    StringPiece input,
+    std::string& out,
+    const serialization_opts& opts) {
   auto hexDigit = [] (int c) -> char {
     return c < 10 ? c + '0' : c - 10 + 'a';
   };
@@ -663,7 +718,7 @@ void escapeString(StringPiece input,
         // checking that utf8 encodings are valid
         char32_t v = decodeUtf8(q, e, opts.skip_invalid_utf8);
         if (opts.skip_invalid_utf8 && v == U'\ufffd') {
-          out.append("\ufffd");
+          out.append(u8"\ufffd");
           p = q;
           continue;
         }
@@ -704,8 +759,8 @@ void escapeString(StringPiece input,
   out.push_back('\"');
 }
 
-fbstring stripComments(StringPiece jsonC) {
-  fbstring result;
+std::string stripComments(StringPiece jsonC) {
+  std::string result;
   enum class State {
     None,
     InString,
@@ -785,11 +840,11 @@ dynamic parseJson(
   return ret;
 }
 
-fbstring toJson(dynamic const& dyn) {
+std::string toJson(dynamic const& dyn) {
   return json::serialize(dyn, json::serialization_opts());
 }
 
-fbstring toPrettyJson(dynamic const& dyn) {
+std::string toPrettyJson(dynamic const& dyn) {
   json::serialization_opts opts;
   opts.pretty_formatting = true;
   return json::serialize(dyn, opts);
@@ -805,6 +860,15 @@ void dynamic::print_as_pseudo_json(std::ostream& out) const {
   opts.allow_non_string_keys = true;
   opts.allow_nan_inf = true;
   out << json::serialize(*this, opts);
+}
+
+void PrintTo(const dynamic& dyn, std::ostream* os) {
+  json::serialization_opts opts;
+  opts.allow_nan_inf = true;
+  opts.allow_non_string_keys = true;
+  opts.pretty_formatting = true;
+  opts.sort_keys = true;
+  *os << json::serialize(dyn, opts);
 }
 
 //////////////////////////////////////////////////////////////////////

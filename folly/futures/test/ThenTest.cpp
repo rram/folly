@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,10 +29,12 @@ struct Widget {
     : v_(other.v_), copied_(other.copied_ + 1), moved_(other.moved_) {}
   Widget(Widget&& other) noexcept
     : v_(other.v_), copied_(other.copied_), moved_(other.moved_ + 1) {}
-  Widget& operator=(const Widget& other)
-    { throw std::logic_error("unexpected copy assignment"); }
-  Widget& operator=(Widget&& other)
-    { throw std::logic_error("unexpected move assignment"); }
+  Widget& operator=(const Widget& /* other */) {
+    throw std::logic_error("unexpected copy assignment");
+  }
+  Widget& operator=(Widget&& /* other */) {
+    throw std::logic_error("unexpected move assignment");
+  }
 };
 
 TEST(Then, tryConstructor) {

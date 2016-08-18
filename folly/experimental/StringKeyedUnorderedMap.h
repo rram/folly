@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@
 // Copyright 2013-present Facebook. All Rights Reserved.
 // @author: Pavlo Kushnir (pavlo)
 
-#ifndef FOLLY_EXPERIMENTAL_STRINGKEYEDUNORDEREDMAP_H_
-#define FOLLY_EXPERIMENTAL_STRINGKEYEDUNORDEREDMAP_H_
+#pragma once
 
 #include <initializer_list>
 #include <memory>
@@ -108,9 +107,8 @@ public:
   }
 
   StringKeyedUnorderedMap(StringKeyedUnorderedMap&& other,
-                          const allocator_type& a) noexcept
-      : Base(std::move(other)/*, a*/ /* not supported by gcc */) {
-  }
+                          const allocator_type& /* a */) noexcept
+      : Base(std::move(other) /*, a*/ /* not supported by gcc */) {}
 
   StringKeyedUnorderedMap(std::initializer_list<value_type> il)
       : StringKeyedUnorderedMap(il.begin(), il.end()) {
@@ -166,6 +164,7 @@ public:
 
   using Base::at;
   using Base::find;
+  using Base::count;
 
   template <class... Args>
   std::pair<iterator, bool> emplace(StringPiece key, Args&&... args) {
@@ -228,5 +227,3 @@ public:
 };
 
 } // folly
-
-#endif /* FOLLY_EXPERIMENTAL_STRINGKEYEDUNORDEREDMAP_H_ */

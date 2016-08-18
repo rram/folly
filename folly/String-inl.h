@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,13 +14,12 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_STRING_INL_H_
-#define FOLLY_STRING_INL_H_
+#pragma once
 
 #include <stdexcept>
 #include <iterator>
 
-#ifndef FOLLY_BASE_STRING_H_
+#ifndef FOLLY_STRING_H_
 #error This file may only be included from String.h
 #endif
 
@@ -265,29 +264,6 @@ inline char delimFront(StringPiece s) {
 }
 
 /*
- * These output conversion templates allow us to support multiple
- * output string types, even when we are using an arbitrary
- * OutputIterator.
- */
-template<class OutStringT> struct OutputConverter {};
-
-template<> struct OutputConverter<std::string> {
-  std::string operator()(StringPiece sp) const {
-    return sp.toString();
-  }
-};
-
-template<> struct OutputConverter<fbstring> {
-  fbstring operator()(StringPiece sp) const {
-    return sp.toFbstring();
-  }
-};
-
-template<> struct OutputConverter<StringPiece> {
-  StringPiece operator()(StringPiece sp) const { return sp; }
-};
-
-/*
  * Shared implementation for all the split() overloads.
  *
  * This uses some external helpers that are overloaded to let this
@@ -305,11 +281,9 @@ void internalSplit(DelimT delim, StringPiece sp, OutputIterator out,
   const size_t strSize = sp.size();
   const size_t dSize = delimSize(delim);
 
-  OutputConverter<OutStringT> conv;
-
   if (dSize > strSize || dSize == 0) {
     if (!ignoreEmpty || strSize > 0) {
-      *out++ = conv(sp);
+      *out++ = to<OutStringT>(sp);
     }
     return;
   }
@@ -324,7 +298,7 @@ void internalSplit(DelimT delim, StringPiece sp, OutputIterator out,
   for (size_t i = 0; i <= strSize - dSize; ++i) {
     if (atDelim(&s[i], delim)) {
       if (!ignoreEmpty || tokenSize > 0) {
-        *out++ = conv(StringPiece(&s[tokenStartPos], tokenSize));
+        *out++ = to<OutStringT>(sp.subpiece(tokenStartPos, tokenSize));
       }
 
       tokenStartPos = i + dSize;
@@ -336,7 +310,7 @@ void internalSplit(DelimT delim, StringPiece sp, OutputIterator out,
   }
   tokenSize = strSize - tokenStartPos;
   if (!ignoreEmpty || tokenSize > 0) {
-    *out++ = conv(StringPiece(&s[tokenStartPos], tokenSize));
+    *out++ = to<OutStringT>(sp.subpiece(tokenStartPos, tokenSize));
   }
 }
 
@@ -345,36 +319,25 @@ template<class String> StringPiece prepareDelim(const String& s) {
 }
 inline char prepareDelim(char c) { return c; }
 
-template <class Dst>
-struct convertTo {
-  template <class Src>
-  static Dst from(const Src& src) { return folly::to<Dst>(src); }
-  static Dst from(const Dst& src) { return src; }
-};
-
-template<bool exact,
-         class Delim,
-         class OutputType>
-typename std::enable_if<IsSplitTargetType<OutputType>::value, bool>::type
-splitFixed(const Delim& delimiter,
-           StringPiece input,
-           OutputType& out) {
+template <bool exact, class Delim, class OutputType>
+bool splitFixed(const Delim& delimiter, StringPiece input, OutputType& output) {
+  static_assert(
+      exact || std::is_same<OutputType, StringPiece>::value ||
+          IsSomeString<OutputType>::value,
+      "split<false>() requires that the last argument be a string type");
   if (exact && UNLIKELY(std::string::npos != input.find(delimiter))) {
     return false;
   }
-  out = convertTo<OutputType>::from(input);
+  parseTo(input, output);
   return true;
 }
 
-template<bool exact,
-         class Delim,
-         class OutputType,
-         class... OutputTypes>
-typename std::enable_if<IsSplitTargetType<OutputType>::value, bool>::type
-splitFixed(const Delim& delimiter,
-           StringPiece input,
-           OutputType& outHead,
-           OutputTypes&... outTail) {
+template <bool exact, class Delim, class OutputType, class... OutputTypes>
+bool splitFixed(
+    const Delim& delimiter,
+    StringPiece input,
+    OutputType& outHead,
+    OutputTypes&... outTail) {
   size_t cut = input.find(delimiter);
   if (UNLIKELY(cut == std::string::npos)) {
     return false;
@@ -383,7 +346,7 @@ splitFixed(const Delim& delimiter,
   StringPiece tail(input.begin() + cut + detail::delimSize(delimiter),
                    input.end());
   if (LIKELY(splitFixed<exact>(delimiter, tail, outTail...))) {
-    outHead = convertTo<OutputType>::from(head);
+    parseTo(head, outHead);
     return true;
   }
   return false;
@@ -430,20 +393,13 @@ void splitTo(const Delim& delimiter,
     ignoreEmpty);
 }
 
-template<bool exact,
-         class Delim,
-         class OutputType,
-         class... OutputTypes>
-typename std::enable_if<IsSplitTargetType<OutputType>::value, bool>::type
-split(const Delim& delimiter,
-      StringPiece input,
-      OutputType& outHead,
-      OutputTypes&... outTail) {
+template <bool exact, class Delim, class... OutputTypes>
+typename std::enable_if<
+    AllConvertible<OutputTypes...>::value && sizeof...(OutputTypes) >= 1,
+    bool>::type
+split(const Delim& delimiter, StringPiece input, OutputTypes&... outputs) {
   return detail::splitFixed<exact>(
-    detail::prepareDelim(delimiter),
-    input,
-    outHead,
-    outTail...);
+      detail::prepareDelim(delimiter), input, outputs...);
 }
 
 namespace detail {
@@ -669,5 +625,3 @@ void hexDump(const void* ptr, size_t size, OutIt out) {
 }
 
 }  // namespace folly
-
-#endif /* FOLLY_STRING_INL_H_ */

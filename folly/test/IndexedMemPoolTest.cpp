@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,11 +16,10 @@
 
 #include <folly/IndexedMemPool.h>
 #include <folly/test/DeterministicSchedule.h>
+#include <folly/portability/Unistd.h>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <semaphore.h>
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 using namespace folly;
@@ -157,7 +156,7 @@ TEST(IndexedMemPool, locate_elem) {
 }
 
 struct NonTrivialStruct {
-  static __thread int count;
+  static FOLLY_TLS int count;
 
   int elem_;
 
@@ -176,7 +175,7 @@ struct NonTrivialStruct {
   }
 };
 
-__thread int NonTrivialStruct::count;
+FOLLY_TLS int NonTrivialStruct::count;
 
 TEST(IndexedMemPool, eager_recycle) {
   typedef IndexedMemPool<NonTrivialStruct> Pool;
@@ -215,10 +214,4 @@ TEST(IndexedMemPool, late_recycle) {
     }
   }
   EXPECT_EQ(NonTrivialStruct::count, 0);
-}
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
 }

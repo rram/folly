@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,7 @@
 
 #include <folly/Subprocess.h>
 
-#include <unistd.h>
 #include <sys/types.h>
-#include <dirent.h>
 
 #include <boost/container/flat_set.hpp>
 #include <glog/logging.h>
@@ -33,6 +31,7 @@
 #include <folly/gen/String.h>
 #include <folly/experimental/TestUtil.h>
 #include <folly/experimental/io/FsUtil.h>
+#include <folly/portability/Unistd.h>
 
 using namespace folly;
 
@@ -69,6 +68,19 @@ TEST(SimpleSubprocessTest, MoveSubprocess) {
   EXPECT_TRUE(new_proc.returnCode().running());
   EXPECT_EQ(0, new_proc.wait().exitStatus());
   // Now old_proc is destroyed, but we don't crash.
+}
+
+TEST(SimpleSubprocessTest, DefaultConstructor) {
+  Subprocess proc;
+  EXPECT_TRUE(proc.returnCode().notStarted());
+
+  {
+    auto p1 = Subprocess(std::vector<std::string>{"/bin/true"});
+    proc = std::move(p1);
+  }
+
+  EXPECT_TRUE(proc.returnCode().running());
+  EXPECT_EQ(0, proc.wait().exitStatus());
 }
 
 #define EXPECT_SPAWN_ERROR(err, errMsg, cmd, ...) \
@@ -232,6 +244,52 @@ TEST(PopenSubprocessTest, PopenRead) {
   proc.waitChecked();
 }
 
+// DANGER: This class runs after fork in a child processes. Be fast, the
+// parent thread is waiting, but remember that other parent threads are
+// running and may mutate your state.  Avoid mutating any data belonging to
+// the parent.  Avoid interacting with non-POD data that originated in the
+// parent.  Avoid any libraries that may internally reference non-POD data.
+// Especially beware parent mutexes -- for example, glog's LOG() uses one.
+struct WriteFileAfterFork
+    : public Subprocess::DangerousPostForkPreExecCallback {
+  explicit WriteFileAfterFork(std::string filename)
+    : filename_(std::move(filename)) {}
+  virtual ~WriteFileAfterFork() {}
+  int operator()() override {
+    return writeFile(std::string("ok"), filename_.c_str()) ? 0 : errno;
+  }
+  const std::string filename_;
+};
+
+TEST(AfterForkCallbackSubprocessTest, TestAfterForkCallbackSuccess) {
+  test::ChangeToTempDir td;
+  // Trigger a file write from the child.
+  WriteFileAfterFork write_cob("good_file");
+  Subprocess proc(
+    std::vector<std::string>{"/bin/echo"},
+    Subprocess::Options().dangerousPostForkPreExecCallback(&write_cob)
+  );
+  // The file gets written immediately.
+  std::string s;
+  EXPECT_TRUE(readFile(write_cob.filename_.c_str(), s));
+  EXPECT_EQ("ok", s);
+  proc.waitChecked();
+}
+
+TEST(AfterForkCallbackSubprocessTest, TestAfterForkCallbackError) {
+  test::ChangeToTempDir td;
+  // The child will try to write to a file, whose directory does not exist.
+  WriteFileAfterFork write_cob("bad/file");
+  EXPECT_THROW(
+    Subprocess proc(
+      std::vector<std::string>{"/bin/echo"},
+      Subprocess::Options().dangerousPostForkPreExecCallback(&write_cob)
+    ),
+    SubprocessSpawnError
+  );
+  EXPECT_FALSE(fs::exists(write_cob.filename_));
+}
+
 TEST(CommunicateSubprocessTest, SimpleRead) {
   Subprocess proc(std::vector<std::string>{ "/bin/echo", "-n", "foo", "bar"},
                   Subprocess::pipeStdout());
@@ -345,8 +403,6 @@ TEST(CommunicateSubprocessTest, Duplex2) {
 namespace {
 
 bool readToString(int fd, std::string& buf, size_t maxSize) {
-  size_t bytesRead = 0;
-
   buf.resize(maxSize);
   char* dest = &buf.front();
   size_t remaining = maxSize;

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,8 +42,7 @@
 // slower than MD5.
 //
 
-#ifndef FOLLY_SPOOKYHASHV1_H_
-#define FOLLY_SPOOKYHASHV1_H_
+#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -302,5 +301,3 @@ private:
 
 }  // namespace hash
 }  // namespace folly
-
-#endif

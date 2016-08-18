@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_GEN_PARALLELMAP_H
+#ifndef FOLLY_GEN_PARALLELMAP_H_
 #error This file may only be included from folly/gen/ParallelMap.h
 #endif
 
@@ -148,7 +148,7 @@ class PMap : public Operator<PMap<Predicate>> {
     Generator(Source source, const Predicate& pred, size_t nThreads)
       : source_(std::move(source)),
         pred_(pred),
-        nThreads_(nThreads ?: sysconf(_SC_NPROCESSORS_ONLN)) {
+        nThreads_(nThreads ? nThreads : sysconf(_SC_NPROCESSORS_ONLN)) {
     }
 
     template<class Body>

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,13 +26,13 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <unistd.h>
 
-#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include <folly/Conv.h>
 #include <folly/Subprocess.h>
+#include <folly/portability/GFlags.h>
+#include <folly/portability/Unistd.h>
 
 using folly::Subprocess;
 

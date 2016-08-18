@@ -12,6 +12,13 @@ AC_INIT([folly], m4_translit(folly_version_str, [:], [.]), [folly@fb.com])
 LT_VERSION=folly_version_str:0
 AC_SUBST([LT_VERSION])
 
+#declare pkg-config variables
+PKG_VERSION=m4_join([.], m4_reverse(m4_translit(folly_version_str, [:], [,])))
+AC_SUBST([PKG_VERSION])
+AC_SUBST([PKG_CXXFLAGS])
+AC_SUBST([PKG_DEPS])
+AC_SUBST([PKG_LIBS])
+
 AC_CONFIG_SRCDIR([Likely.h])
 AC_CONFIG_HEADERS([config.h])
 AX_PREFIX_CONFIG_H([folly-config.h], [folly], [config.h])
@@ -36,47 +43,28 @@ AC_LANG([C++])
 # Checks for programs.
 AC_PROG_CXX
 AC_PROG_CC
-AC_CXX_COMPILE_STDCXX_0X
+
+AC_CXX_COMPILE_STDCXX_1Y
 
 # Be sure to add any -std option to CXXFLAGS before we invoke any
 # AC_COMPILE_IFELSE() or similar macros. Any such macros that are invoked
 # before we update CXXFLAGS will not be run with the same options that we use
 # during the real build.
 STD=""
-if test "x$ac_cv_cxx_compile_cxx0x_cxx" = xyes; then
-   STD="-std=c++0x"
+if test "x$ac_cv_cxx_compile_cxx1y_cxx" = xyes; then
+   STD="-std=c++1y"
 fi
-if test "x$ac_cv_cxx_compile_cxx0x_gxx" = xyes; then
-   STD="-std=gnu++0x"
+if test "x$ac_cv_cxx_compile_cxx1y_gxx" = xyes; then
+   STD="-std=gnu++1y"
 fi
 
 CXXFLAGS="$STD $CXXFLAGS"
 
+# expose required -std option via pkg-config
+PKG_CXXFLAGS=$STD
+
 # Checks for glog and gflags
 # There are no symbols with C linkage, so we do a try-run
-AC_HAVE_LIBRARY([glog],[],[AC_MSG_ERROR(
-                [Please install google-glog library])])
-AC_CACHE_CHECK(
-  [for glog viability],
-  [folly_cv_prog_cc_glog],
-  [AC_RUN_IFELSE(
-    [AC_LANG_SOURCE[
-      #include <glog/logging.h>
-      int main(int argc, char** argv) {
-        google::InitGoogleLogging(argv[0]);
-        google::ShutdownGoogleLogging();
-        return 0;
-      }
-    ]],
-    [folly_cv_prog_cc_glog=yes],
-    [folly_cv_prog_cc_glog=no]
-  )]
-)
-
-if test "$folly_cv_prog_cc_glog" != "yes"; then
-  AC_MSG_ERROR(["libglog invalid, see config.log for details"])
-fi
-
 AC_HAVE_LIBRARY([gflags],[],[AC_MSG_ERROR(
                 [Please install google-gflags library])])
 AC_CACHE_CHECK(
@@ -99,28 +87,55 @@ AC_CACHE_CHECK(
 if test "$folly_cv_prog_cc_gflags" != "yes"; then
   AC_MSG_ERROR(["libgflags invalid, see config.log for details"])
 fi
+FB_CHECK_PKG_CONFIG([GFLAGS], [libgflags])
+
+AC_HAVE_LIBRARY([glog],[],[AC_MSG_ERROR(
+                [Please install google-glog library])])
+AC_CACHE_CHECK(
+  [for glog viability],
+  [folly_cv_prog_cc_glog],
+  [AC_RUN_IFELSE(
+    [AC_LANG_SOURCE[
+      #include <glog/logging.h>
+      int main(int argc, char** argv) {
+        google::InitGoogleLogging(argv[0]);
+        google::ShutdownGoogleLogging();
+        return 0;
+      }
+    ]],
+    [folly_cv_prog_cc_glog=yes],
+    [folly_cv_prog_cc_glog=no]
+  )]
+)
+
+if test "$folly_cv_prog_cc_glog" != "yes"; then
+  AC_MSG_ERROR(["libglog invalid, see config.log for details"])
+fi
+FB_CHECK_PKG_CONFIG([GLOG], [libglog])
 
 AC_CHECK_LIB(ssl,
         SSL_ctrl,
         [],
         [AC_MSG_ERROR(["Error: libssl required"])])
+FB_CHECK_PKG_CONFIG([OPENSSL], [openssl])
 
 # check for boost libs
 AX_BOOST_BASE([1.51.0], [], [AC_MSG_ERROR(
-              [Please install boost >= 1.51.0 (context, thread, program_options, regex, and system)])])
+              [Please install boost >= 1.51.0 (context, thread, program_options, regex, system and chrono)])])
 AX_BOOST_CONTEXT
 AX_BOOST_PROGRAM_OPTIONS
 AX_BOOST_THREAD
 AX_BOOST_REGEX
 AX_BOOST_SYSTEM
 AX_BOOST_FILESYSTEM
+AX_BOOST_CHRONO
 
 # Check for python interpreter
 AM_PATH_PYTHON
 
 # Checks for header files.
 AC_HEADER_STDC
-AC_CHECK_HEADERS([fcntl.h features.h inttypes.h limits.h stdint.h stdlib.h string.h sys/time.h unistd.h mutex.h malloc.h emmintrin.h byteswap.h bits/functexcept.h bits/c++config.h])
+AC_CHECK_HEADERS([fcntl.h features.h inttypes.h limits.h sched.h stdint.h stdlib.h string.h sys/time.h unistd.h mutex.h malloc.h byteswap.h bits/functexcept.h bits/c++config.h])
 
 AC_CHECK_HEADER(double-conversion/double-conversion.h, [], [AC_MSG_ERROR(
                 [Couldn't find double-conversion.h, please download from \
@@ -129,6 +144,7 @@ AC_CHECK_LIB([double-conversion],[ceil],[],[AC_MSG_ERROR(
              [Please install double-conversion library])])
 
 AC_CHECK_LIB([event], [event_set], [], [AC_MSG_ERROR([Unable to find libevent])])
+FB_CHECK_PKG_CONFIG([EVENT], [libevent])
 
 AC_CHECK_LIB([jemalloc], [xallocx])
 
@@ -228,7 +244,49 @@ AC_CACHE_CHECK(
     [folly_cv_lib_libcpp=no])])
 
 if test "$folly_cv_lib_libcpp" = yes; then
-  AC_DEFINE([USE_LIBCPP], [1], [Define to 1 if we're using libc++.])
+  AC_DEFINE([USE_LIBCPP], [1], [Define to 1 if we are using libc++.])
+fi
+
+AC_CACHE_CHECK(
+  [for c++11 atomic support without GNU Atomic library],
+  [folly_cv_lib_libatomic],
+  [AC_LINK_IFELSE(
+    [AC_LANG_SOURCE[
+      #include <atomic>
+      int main() {
+        struct Test { int val; };
+        std::atomic<Test> s;
+        s.is_lock_free();
+      }
+    ]],
+    [folly_cv_lib_libatomic=yes],
+    [folly_cv_lib_libatomic=no])])
+
+if test "$folly_cv_lib_libatomic" = no; then
+  AC_HAVE_LIBRARY([atomic],[],[AC_MSG_ERROR(
+                  [Please install the GNU Atomic library])])
+fi
+
+AC_CACHE_CHECK(
+  [for liblinux-vdso support],
+  [folly_cv_lib_liblinux_vdso],
+  [AC_RUN_IFELSE(
+    [AC_LANG_PROGRAM[
+      #include <dlfcn.h>
+      int main() {
+        void *h = dlopen("linux-vdso.so.1", RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD);
+        if (h == nullptr) {
+          return -1;
+        }
+        dlclose(h);
+        return 0;
+      }
+    ]],
+    [folly_cv_lib_liblinux_vdso=yes],
+    [folly_cv_lib_liblinux_vdso=no])])
+
+if test "$folly_cv_lib_liblinux_vdso" = yes; then
+  AC_DEFINE([HAVE_LINUX_VDSO], [1], [Define to 1 if liblinux-vdso is available])
 fi
 
 AC_CACHE_CHECK(
@@ -294,6 +352,47 @@ AC_CACHE_CHECK(
 if test "$folly_cv_prog_cc_weak_symbols" = yes; then
   AC_DEFINE([HAVE_WEAK_SYMBOLS], [1],
             [Define to 1 if the linker supports weak symbols.])
+fi
+
+
+# Figure out if we support wchar well
+AC_CACHE_CHECK(
+  [for wchar support],
+  [folly_cv_prog_cc_wchar_support],
+  [AC_RUN_IFELSE(
+    [AC_LANG_SOURCE[
+      #include <cstddef>
+      #include <cwchar>
+
+      int main(int argc, char** argv) {
+        return wcstol(L"01", nullptr, 10) == 1 ? 0 : 1;
+      }
+    ]],
+    [folly_cv_prog_cc_wchar_support=yes],
+    [folly_cv_prog_cc_wchar_support=no])])
+
+if test "$folly_cv_prog_cc_wchar_support" = "yes"; then
+  AC_DEFINE([HAVE_WCHAR_SUPPORT], [1], [Define to 1 if the libc supports wchar well])
+fi
+
+# Figure out whether the architecture supports unaligned accesses
+AC_CACHE_CHECK(
+  [for unaligned access support],
+  [folly_cv_prog_cc_unaligned_access],
+  [AC_RUN_IFELSE(
+    [AC_LANG_SOURCE[
+      int main(int argc, char** argv) {
+        char buf[64] = {0};
+        unsigned long *ptr = (unsigned long *)(buf + 1);
+        *ptr = 0xdeadbeef;
+        return (*ptr & 0xff) == 0xef ? 0 : 1;
+      }
+    ]],
+    [folly_cv_prog_cc_unaligned_access=yes],
+    [folly_cv_prog_cc_unaligned_access=no])])
+
+if test "$folly_cv_prog_cc_unaligned_access" = "yes"; then
+  AC_DEFINE([HAVE_UNALIGNED_ACCESS], [1], [Define to 1 if the architecture allows unaligned accesses])
 fi
 
 AC_CACHE_CHECK(
@@ -369,6 +468,41 @@ if test "$folly_cv_prog_cc_xsi_strerror_r" = "yes"; then
   AC_DEFINE([HAVE_XSI_STRERROR_R], [1], [Define to 1 if the runtime supports XSI-style strerror_r])
 fi
 
+AC_CACHE_CHECK(
+  [for ext/random and __gnu_cxx::sfmt19937],
+  [folly_cv_prog_cc_have_extrandom_sfmt19937],
+  [AC_COMPILE_IFELSE(
+    [AC_LANG_SOURCE[
+      #include <ext/random>
+      int main(int argc, char** argv) {
+        __gnu_cxx::sfmt19937 rng;
+        return 0;
+      }
+    ]],
+    [folly_cv_prog_cc_have_extrandom_sfmt19937=yes],
+    [folly_cv_prog_cc_have_extrandom_sfmt19937=no])])
+
+AC_CACHE_CHECK(
+  [for VLA (variable-length array) support],
+  [folly_cv_prog_cc_have_vla],
+  [AC_COMPILE_IFELSE(
+    [AC_LANG_SOURCE[
+      int main(int argc, char** argv) {
+        unsigned size = argc;
+        char data[size];
+        return 0;
+      }
+    ]],
+    [folly_cv_prog_cc_have_vla=yes],
+    [folly_cv_prog_cc_have_vla=no])])
+
+test "$folly_cv_prog_cc_have_vla" = yes && have_vla=1 || have_vla=0
+AC_DEFINE_UNQUOTED(
+  [HAVE_VLA],
+  [$have_vla],
+  [Define to 1 if the compiler has VLA (variable-length array) support,
+   otherwise define to 0])
+
 # Checks for library functions.
 AC_CHECK_FUNCS([getdelim \
                 gettimeofday \
@@ -376,21 +510,44 @@ AC_CHECK_FUNCS([getdelim \
                 memset \
                 pow \
                 strerror \
-                pthread_yield \
+                sched_yield \
                 malloc_size \
                 malloc_usable_size \
                 memrchr \
-                pipe2])
-
-if test "$ac_cv_func_pthread_yield" = "no"; then
-   AC_CHECK_HEADERS([sched.h])
-   AC_CHECK_FUNCS([sched_yield])
-fi
+                pipe2 \
+                preadv \
+                pwritev \
+              ])
 
 AC_CHECK_HEADER([lz4.h], AC_CHECK_LIB([lz4], [LZ4_decompress_safe]))
 AC_CHECK_HEADER([snappy.h], AC_CHECK_LIB([snappy], [main]))
 AC_CHECK_HEADER([zlib.h], AC_CHECK_LIB([z], [main]))
 AC_CHECK_HEADER([lzma.h], AC_CHECK_LIB([lzma], [main]))
+AC_CHECK_HEADER([zstd.h], AC_CHECK_LIB([zstd], [main]))
+
+AC_ARG_ENABLE([follytestmain],
+   AS_HELP_STRING([--enable-follytestmain], [enables using main function from folly for tests]),
+   [follytestmain=${enableval}], [follytestmain=no])
+
+use_follytestmain=yes
+if test "x${follytestmain}" = "xyes"; then
+   AC_CHECK_HEADERS([libdwarf.h dwarf.h],, AC_MSG_ERROR([Please install libdwarf development package]))
+   AC_CHECK_HEADERS([libelf.h elf.h],, AC_MSG_ERROR([Please install libelf development package]))
+   AC_CHECK_HEADERS([libunwind.h],, AC_MSG_ERROR([Please install libinwind development package]))
+else
+   AC_CHECK_HEADERS([libdwarf.h dwarf.h],, [use_follytestmain=no])
+   AC_CHECK_HEADERS([libelf.h elf.h],, [use_follytestmain=no])
+   AC_CHECK_HEADERS([libunwind.h],, [use_follytestmain=no])
+fi
+
+AC_ARG_ENABLE([mobile],
+   AS_HELP_STRING([--enable-mobile],
+                  [enables using main function from folly for tests]),
+                  [mobile=${enableval}], [mobile=no])
+AS_IF([test "x${mobile}" = "xyes"], [
+    AC_DEFINE([MOBILE], [1],
+              [Define to 1 for compiler guards for mobile targets.])
+])
 
 # Include directory that contains "folly" so #include <folly/Foo.h> works
 AM_CPPFLAGS='-I$(top_srcdir)/..'
@@ -398,19 +555,34 @@ AM_CPPFLAGS="$AM_CPPFLAGS $BOOST_CPPFLAGS"
 AM_LDFLAGS="$AM_LDFLAGS $BOOST_CONTEXT_LIB $BOOST_PROGRAM_OPTIONS_LIB"
 AM_LDFLAGS="$AM_LDFLAGS $BOOST_THREAD_LIB $BOOST_FILESYSTEM_LIB"
 AM_LDFLAGS="$AM_LDFLAGS $BOOST_SYSTEM_LIB $BOOST_REGEX_LIB -lpthread"
+AM_LDFLAGS="$AM_LDFLAGS $BOOST_CHRONO_LIB"
 
 AC_SUBST([AM_CPPFLAGS])
 AC_SUBST([AM_LDFLAGS])
 
 AM_CONDITIONAL([HAVE_STD_THREAD], [test "$ac_cv_header_features" = "yes"])
 AM_CONDITIONAL([HAVE_X86_64], [test "$build_cpu" = "x86_64"])
+AM_CONDITIONAL([HAVE_PPC64], [test "$build_cpu" = "powerpc64le"])
+AM_CONDITIONAL([RUN_ARCH_SPECIFIC_TESTS], [test "$build_cpu" = "x86_64" || test "$build_cpu" = "powerpc64le"])
 AM_CONDITIONAL([HAVE_LINUX], [test "$build_os" == "linux-gnu"])
 AM_CONDITIONAL([HAVE_WEAK_SYMBOLS],
                [test "$folly_cv_prog_cc_weak_symbols" = "yes"])
-AM_CONDITIONAL([HAVE_BITS_FUNCTEXCEPT], [test "$ac_cv_header_bits_functexcept_h" = "yes"])
+AM_CONDITIONAL([HAVE_BITS_FUNCTEXCEPT_H], [test "$ac_cv_header_bits_functexcept_h" = "yes"])
+AM_CONDITIONAL([HAVE_EXTRANDOM_SFMT19937],
+               [test "$folly_cv_prog_cc_have_extrandom_sfmt19937" = "yes"])
+AM_CONDITIONAL([FOLLY_TESTMAIN], [test "x${use_follytestmain}" = "xyes"])
+AM_CONDITIONAL([HAVE_BOOST_CONTEXT], [test "x${ax_cv_boost_context}" = "xyes"])
+
+# remove pkg-config deps from dependent libraries
+# (at least for pkg-config file purposes)
+FB_FILTER_PKG_LIBS([$AM_LDFLAGS $LIBS])
 
 # Output
 AC_CONFIG_FILES([Makefile
+                 libfolly.pc
                  test/Makefile
-                 test/function_benchmark/Makefile])
+                 test/function_benchmark/Makefile
+                 experimental/Makefile
+                 experimental/symbolizer/Makefile
+                 init/Makefile])
 AC_OUTPUT

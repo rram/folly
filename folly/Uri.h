@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_URI_H_
+#pragma once
 #define FOLLY_URI_H_
 
 #include <folly/String.h>
@@ -119,5 +119,3 @@ class Uri {
 }  // namespace folly
 
 #include <folly/Uri-inl.h>
-
-#endif /* FOLLY_URI_H_ */

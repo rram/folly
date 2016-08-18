@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 #include <folly/stats/TimeseriesHistogram.h>
 #include <folly/stats/TimeseriesHistogram-defs.h>
+
+#include <random>
 
 #include <gtest/gtest.h>
 
@@ -428,7 +430,6 @@ TEST(TimeseriesHistogram, QueryByInterval) {
 
   for (int i = 0; i < 12; i++) {
     const auto& itv = intervals[i];
-    int c = mhts.count(itv.start, itv.end);
     // Some of the older intervals that fall in the alltime bucket
     // are off by 1 or 2 in their estimated counts.
     size_t tolerance = 0;

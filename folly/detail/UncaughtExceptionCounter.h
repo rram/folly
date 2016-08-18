@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_DETAIL_UNCAUGHTEXCEPTIONCOUNTER_H_
-#define FOLLY_DETAIL_UNCAUGHTEXCEPTIONCOUNTER_H_
+#pragma once
 
 #include <exception>
 
@@ -27,11 +26,14 @@ struct __cxa_eh_globals;
 // declared in cxxabi.h from libstdc++-v3
 extern "C" __cxa_eh_globals* __cxa_get_globals() noexcept;
 }
-#elif defined(_MSC_VER) && (_MSC_VER >= 1400) // MSVC++ 8.0 or greater
+#elif defined(_MSC_VER) && (_MSC_VER >= 1400) && \
+    (_MSC_VER < 1900) // MSVC++ 8.0 or greater
 #define FOLLY_EXCEPTION_COUNT_USE_GETPTD
 // forward declaration (originally defined in mtdll.h from MSVCRT)
 struct _tiddata;
 extern "C" _tiddata* _getptd(); // declared in mtdll.h from MSVCRT
+#elif defined(_MSC_VER) && (_MSC_VER >= 1900) // MSVC++ 2015
+#define FOLLY_EXCEPTION_COUNT_USE_STD
 #else
 // Raise an error when trying to use this on unsupported platforms.
 #error "Unsupported platform, don't include this header."
@@ -51,11 +53,11 @@ namespace folly { namespace detail {
  */
 class UncaughtExceptionCounter {
  public:
-  UncaughtExceptionCounter()
-    : exceptionCount_(getUncaughtExceptionCount()) {}
+  UncaughtExceptionCounter() noexcept
+      : exceptionCount_(getUncaughtExceptionCount()) {}
 
-  UncaughtExceptionCounter(const UncaughtExceptionCounter& other)
-    : exceptionCount_(other.exceptionCount_) {}
+  UncaughtExceptionCounter(const UncaughtExceptionCounter& other) noexcept
+      : exceptionCount_(other.exceptionCount_) {}
 
   bool isNewUncaughtException() noexcept {
     return getUncaughtExceptionCount() > exceptionCount_;
@@ -84,9 +86,9 @@ inline int UncaughtExceptionCounter::getUncaughtExceptionCount() noexcept {
   // The offset below returns _tiddata::_ProcessingThrow.
   return *(reinterpret_cast<int*>(static_cast<char*>(
       static_cast<void*>(_getptd())) + sizeof(void*) * 28 + 0x4 * 8));
+#elif defined(FOLLY_EXCEPTION_COUNT_USE_STD)
+  return std::uncaught_exceptions();
 #endif
 }
 
 }} // namespaces
-
-#endif /* FOLLY_DETAIL_UNCAUGHTEXCEPTIONCOUNTER_H_ */

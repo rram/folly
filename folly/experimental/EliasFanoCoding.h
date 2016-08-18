@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,9 +21,9 @@
  * "Quasi-succinct indices" (arxiv:1206.4300).
  */
 
-#ifndef FOLLY_EXPERIMENTAL_ELIAS_FANO_CODING_H
-#define FOLLY_EXPERIMENTAL_ELIAS_FANO_CODING_H
+#pragma once
 
+#include <algorithm>
 #include <cstdlib>
 #include <limits>
 #include <type_traits>
@@ -36,19 +36,13 @@
 #include <folly/experimental/Select64.h>
 #include <glog/logging.h>
 
-#ifndef __GNUC__
-#error EliasFanoCoding.h requires GCC
-#endif
-
 #if !FOLLY_X64
 #error EliasFanoCoding.h requires x86_64
 #endif
 
-#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
-#error EliasFanoCoding.h requires little endianness
-#endif
-
 namespace folly { namespace compression {
+
+static_assert(kIsLittleEndian, "EliasFanoCoding.h requires little endianness");
 
 template <class Pointer>
 struct EliasFanoCompressedListBase {
@@ -141,7 +135,7 @@ struct EliasFanoEncoderV2 {
         forwardPointers_(reinterpret_cast<SkipValueType*>(
               result.forwardPointers)),
         result_(result) {
-    memset(result.data.data(), 0, result.data.size());
+    std::fill(result.data.begin(), result.data.end(), 0);
   }
 
   EliasFanoEncoderV2(size_t size, ValueType upperBound)
@@ -149,6 +143,7 @@ struct EliasFanoEncoderV2 {
             Layout::fromUpperBoundAndSize(upperBound, size).allocList()) { }
 
   void add(ValueType value) {
+    CHECK_LT(value, std::numeric_limits<ValueType>::max());
     CHECK_GE(value, lastValue_);
 
     const auto numLowerBits = result_.numLowerBits;
@@ -260,9 +255,7 @@ struct EliasFanoEncoderV2<Value,
       // more serialization-friendly way (upperSizeBits doesn't need
       // to be known by this function, unlike upper).
 
-      // '?: 1' is a workaround for false 'division by zero'
-      // compile-time error.
-      size_t numSkipPointers = (8 * upper - size) / (skipQuantum ?: 1);
+      size_t numSkipPointers = (8 * upper - size) / skipQuantum;
       layout.skipPointers = numSkipPointers * sizeof(SkipValueType);
     }
 
@@ -270,7 +263,7 @@ struct EliasFanoEncoderV2<Value,
     // Store (1-indexed) position of every forwardQuantum-th
     // 1-bit in upper bits sequence.
     /* static */ if (forwardQuantum != 0) {
-      size_t numForwardPointers = size / (forwardQuantum ?: 1);
+      size_t numForwardPointers = size / forwardQuantum;
       layout.forwardPointers = numForwardPointers * sizeof(SkipValueType);
     }
 
@@ -374,16 +367,13 @@ class UpperBitsReader {
 
     // Use forward pointer.
     if (Encoder::forwardQuantum > 0 && n > Encoder::forwardQuantum) {
-      // Workaround to avoid 'division by zero' compile-time error.
-      constexpr size_t q = Encoder::forwardQuantum ?: 1;
-
-      const size_t steps = position_ / q;
+      const size_t steps = position_ / Encoder::forwardQuantum;
       const size_t dest =
         folly::loadUnaligned<SkipValueType>(
             forwardPointers_ + (steps - 1) * sizeof(SkipValueType));
 
-      reposition(dest + steps * q);
-      n = position_ + 1 - steps * q;  // n is > 0.
+      reposition(dest + steps * Encoder::forwardQuantum);
+      n = position_ + 1 - steps * Encoder::forwardQuantum; // n is > 0.
       // Correct inner_ will be set at the end.
     }
 
@@ -410,15 +400,12 @@ class UpperBitsReader {
 
     // Use skip pointer.
     if (Encoder::skipQuantum > 0 && v >= value_ + Encoder::skipQuantum) {
-      // Workaround to avoid 'division by zero' compile-time error.
-      constexpr size_t q = Encoder::skipQuantum ?: 1;
-
-      const size_t steps = v / q;
+      const size_t steps = v / Encoder::skipQuantum;
       const size_t dest =
         folly::loadUnaligned<SkipValueType>(
             skipPointers_ + (steps - 1) * sizeof(SkipValueType));
 
-      reposition(dest + q * steps);
+      reposition(dest + Encoder::skipQuantum * steps);
       position_ = dest - 1;
 
       // Correct inner_ and value_ will be set during the next()
@@ -551,7 +538,7 @@ class EliasFanoReader {
 
   void reset() {
     upper_.reset();
-    value_ = 0;
+    value_ = kInvalidValue;
   }
 
   bool next() {
@@ -582,11 +569,13 @@ class EliasFanoReader {
   }
 
   bool skipTo(ValueType value) {
-    DCHECK_GE(value, value_);
-    if (value <= value_) {
-      return true;
-    } else if (!kUnchecked && value > lastValue_) {
+    // Also works when value_ == kInvalidValue.
+    if (value != kInvalidValue) { DCHECK_GE(value + 1, value_ + 1); }
+
+    if (!kUnchecked && value > lastValue_) {
       return setDone();
+    } else if (value == value_) {
+      return true;
     }
 
     size_t upperValue = (value >> numLowerBits_);
@@ -606,21 +595,15 @@ class EliasFanoReader {
   }
 
   bool jump(size_t n) {
-    if (LIKELY(n - 1 < size_)) {  // n > 0 && n <= size_
-      value_ = readLowerPart(n - 1) | (upper_.jump(n) << numLowerBits_);
-      return true;
-    } else if (n == 0) {
-      reset();
+    if (LIKELY(n < size_)) {  // Also checks that n != -1.
+      value_ = readLowerPart(n) | (upper_.jump(n + 1) << numLowerBits_);
       return true;
     }
     return setDone();
   }
 
   bool jumpTo(ValueType value) {
-    if (value <= 0) {
-      reset();
-      return true;
-    } else if (!kUnchecked && value > lastValue_) {
+    if (!kUnchecked && value > lastValue_) {
       return setDone();
     }
 
@@ -638,12 +621,22 @@ class EliasFanoReader {
 
   size_t size() const { return size_; }
 
+  bool valid() const {
+    return position() < size(); // Also checks that position() != -1.
+  }
+
   size_t position() const { return upper_.position(); }
-  ValueType value() const { return value_; }
+  ValueType value() const {
+    DCHECK(valid());
+    return value_;
+  }
 
  private:
+  constexpr static ValueType kInvalidValue =
+    std::numeric_limits<ValueType>::max();  // Must hold kInvalidValue + 1 == 0.
+
   bool setDone() {
-    value_ = std::numeric_limits<ValueType>::max();
+    value_ = kInvalidValue;
     upper_.setDone(size_);
     return false;
   }
@@ -671,11 +664,9 @@ class EliasFanoReader {
   const uint8_t* lower_;
   detail::UpperBitsReader<Encoder, Instructions> upper_;
   const ValueType lowerMask_;
-  ValueType value_ = 0;
+  ValueType value_ = kInvalidValue;
   ValueType lastValue_;
   uint8_t numLowerBits_;
 };
 
 }}  // namespaces
-
-#endif  // FOLLY_EXPERIMENTAL_ELIAS_FANO_CODING_H

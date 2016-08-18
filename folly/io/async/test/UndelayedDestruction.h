@@ -58,16 +58,6 @@ class UndelayedDestruction : public TDD {
   template<typename ...Args>
   explicit UndelayedDestruction(Args&& ...args)
     : TDD(std::forward<Args>(args)...) {
-      this->TDD::onDestroy_ = [&, this] (bool delayed) {
-        if (delayed && !this->TDD::getDestroyPending()) {
-          return;
-        }
-        // Do nothing.  This will always be invoked from the call to destroy
-        // inside our destructor.
-        assert(!delayed);
-        // prevent unused variable warnings when asserts are compiled out.
-        (void)delayed;
-      };
   }
 
   /**
@@ -76,10 +66,10 @@ class UndelayedDestruction : public TDD {
    * The caller is responsible for ensuring that the object is only destroyed
    * where it is safe to do so.  (i.e., when the destructor guard count is 0).
    *
-   * The exact conditions for meeting this may be dependant upon your class
+   * The exact conditions for meeting this may be dependent upon your class
    * semantics.  Typically you are only guaranteed that it is safe to destroy
    * the object directly from the event loop (e.g., directly from a
-   * TEventBase::LoopCallback), or when the event loop is stopped.
+   * EventBase::LoopCallback), or when the event loop is stopped.
    */
   virtual ~UndelayedDestruction() {
     // Crash if the caller is destroying us with outstanding destructor guards.
@@ -91,12 +81,23 @@ class UndelayedDestruction : public TDD {
     this->destroy();
   }
 
+  void onDelayedDestroy(bool delayed) override {
+    if (delayed && !this->TDD::getDestroyPending()) {
+      return;
+    }
+    // Do nothing.  This will always be invoked from the call to destroy
+    // inside our destructor.
+    assert(!delayed);
+    // prevent unused variable warnings when asserts are compiled out.
+    (void)delayed;
+  }
+
  protected:
   /**
    * Override our parent's destroy() method to make it protected.
    * Callers should use the normal destructor instead of destroy
    */
-  virtual void destroy() {
+  void destroy() override {
     this->TDD::destroy();
   }
 

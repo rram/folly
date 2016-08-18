@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,34 +13,45 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
+#endif
 
 #include <folly/io/async/test/TimeUtil.h>
 
 #include <folly/Conv.h>
+#include <folly/portability/SysSyscall.h>
+#include <folly/portability/Unistd.h>
+#include <folly/portability/Windows.h>
 
 #include <chrono>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/syscall.h>
-#include <sys/utsname.h>
 #include <errno.h>
 #include <glog/logging.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <stdio.h>
 #include <stdexcept>
+
+#ifndef _MSC_VER
+#include <sys/utsname.h>
+#endif
 
 using std::string;
 using namespace std::chrono;
 
 namespace folly {
 
+#ifdef _MSC_VER
+static pid_t gettid() {
+  return pid_t(GetCurrentThreadId());
+}
+#else
 /**
  * glibc doesn't provide gettid(), so define it ourselves.
  */
 static pid_t gettid() {
-  return syscall(SYS_gettid);
+  return syscall(FOLLY_SYS_gettid);
 }
 
 /**
@@ -103,6 +114,7 @@ static int64_t determineJiffiesHZ() {
 
   return hz;
 }
+#endif
 
 /**
  * Determine how long this process has spent waiting to get scheduled on the
@@ -112,6 +124,9 @@ static int64_t determineJiffiesHZ() {
  * time cannot be determined.
  */
 static milliseconds getTimeWaitingMS(pid_t tid) {
+#ifdef _MSC_VER
+  return milliseconds(0);
+#else
   static int64_t jiffiesHZ = 0;
   if (jiffiesHZ == 0) {
     jiffiesHZ = determineJiffiesHZ();
@@ -166,6 +181,7 @@ static milliseconds getTimeWaitingMS(pid_t tid) {
     LOG(ERROR) << "error determining process wait time: %s" << e.what();
     return milliseconds(0);
   }
+#endif
 }
 
 void TimePoint::reset() {

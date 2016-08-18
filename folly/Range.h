@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,16 +17,18 @@
 // @author Mark Rabkin (mrabkin@fb.com)
 // @author Andrei Alexandrescu (andrei.alexandrescu@fb.com)
 
-#ifndef FOLLY_RANGE_H_
-#define FOLLY_RANGE_H_
+#pragma once
 
-#include <folly/Portability.h>
 #include <folly/FBString.h>
+#include <folly/Portability.h>
 #include <folly/SpookyHashV2.h>
+#include <folly/portability/Constexpr.h>
+#include <folly/portability/String.h>
 
 #include <algorithm>
 #include <boost/operators.hpp>
 #include <climits>
+#include <cstddef>
 #include <cstring>
 #include <glog/logging.h>
 #include <iosfwd>
@@ -48,6 +50,8 @@
 #include <folly/CpuId.h>
 #include <folly/Traits.h>
 #include <folly/Likely.h>
+#include <folly/detail/RangeCommon.h>
+#include <folly/detail/RangeSse42.h>
 
 // Ignore shadowing warnings within this file, so includers can use -Wshadow.
 #pragma GCC diagnostic push
@@ -198,15 +202,14 @@ public:
   constexpr Range(Iter start, size_t size)
       : b_(start), e_(start + size) { }
 
-#if FOLLY_HAVE_CONSTEXPR_STRLEN
+# if !__clang__ || __CLANG_PREREQ(3, 7) // Clang 3.6 crashes on this line
+  /* implicit */ Range(std::nullptr_t) = delete;
+# endif
+
   template <class T = Iter, typename detail::IsCharPointer<T>::type = 0>
   constexpr /* implicit */ Range(Iter str)
-      : b_(str), e_(str + strlen(str)) {}
-#else
-  template <class T = Iter, typename detail::IsCharPointer<T>::type = 0>
-  /* implicit */ Range(Iter str)
-      : b_(str), e_(str + strlen(str)) {}
-#endif
+      : b_(str), e_(str + constexpr_strlen(str)) {}
+
   template <class T = Iter, typename detail::IsCharPointer<T>::const_type = 0>
   /* implicit */ Range(const std::string& str)
       : b_(str.data()), e_(b_ + str.size()) {}
@@ -350,12 +353,16 @@ public:
     reset(str.data(), str.size());
   }
 
-  size_type size() const {
-    assert(b_ <= e_);
+  constexpr size_type size() const {
+    // It would be nice to assert(b_ <= e_) here.  This can be achieved even
+    // in a C++11 compatible constexpr function:
+    // http://ericniebler.com/2014/09/27/assert-and-constexpr-in-cxx11/
+    // Unfortunately current gcc versions have a bug causing it to reject
+    // this check in a constexpr function:
+    // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=71448
     return e_ - b_;
   }
   size_type walk_size() const {
-    assert(b_ <= e_);
     return std::distance(b_, e_);
   }
   bool empty() const { return b_ == e_; }
@@ -591,6 +598,22 @@ public:
   }
   bool endsWith(value_type c) const {
     return !empty() && back() == c;
+  }
+
+  /**
+   * Remove the items in [b, e), as long as this subrange is at the beginning
+   * or end of the Range.
+   *
+   * Required for boost::algorithm::trim()
+   */
+  void erase(Iter b, Iter e) {
+    if (b == b_) {
+      b_ = e;
+    } else if (e == e_) {
+      e_ = b;
+    } else {
+      throw std::out_of_range("index out of range");
+    }
   }
 
   /**
@@ -1000,13 +1023,6 @@ size_t qfind(const Range<T>& haystack,
 
 namespace detail {
 
-size_t qfind_first_byte_of_nosse(const StringPiece haystack,
-                                 const StringPiece needles);
-
-#if FOLLY_HAVE_EMMINTRIN_H && __GNUC_PREREQ(4, 6)
-size_t qfind_first_byte_of_sse42(const StringPiece haystack,
-                                 const StringPiece needles);
-
 inline size_t qfind_first_byte_of(const StringPiece haystack,
                                   const StringPiece needles) {
   static auto const qfind_first_byte_of_fn =
@@ -1014,13 +1030,6 @@ inline size_t qfind_first_byte_of(const StringPiece haystack,
                            : qfind_first_byte_of_nosse;
   return qfind_first_byte_of_fn(haystack, needles);
 }
-
-#else
-inline size_t qfind_first_byte_of(const StringPiece haystack,
-                                  const StringPiece needles) {
-  return qfind_first_byte_of_nosse(haystack, needles);
-}
-#endif // FOLLY_HAVE_EMMINTRIN_H
 
 } // namespace detail
 
@@ -1055,9 +1064,6 @@ struct AsciiCaseInsensitive {
   }
 };
 
-extern const AsciiCaseSensitive asciiCaseSensitive;
-extern const AsciiCaseInsensitive asciiCaseInsensitive;
-
 template <class T>
 size_t qfind(const Range<T>& haystack,
              const typename Range<T>::value_type& needle) {
@@ -1079,43 +1085,55 @@ size_t rfind(const Range<T>& haystack,
 // specialization for StringPiece
 template <>
 inline size_t qfind(const Range<const char*>& haystack, const char& needle) {
+  // memchr expects a not-null pointer, early return if the range is empty.
+  if (haystack.empty()) {
+    return std::string::npos;
+  }
   auto pos = static_cast<const char*>(
     ::memchr(haystack.data(), needle, haystack.size()));
   return pos == nullptr ? std::string::npos : pos - haystack.data();
 }
 
-#if FOLLY_HAVE_MEMRCHR
 template <>
 inline size_t rfind(const Range<const char*>& haystack, const char& needle) {
+  // memchr expects a not-null pointer, early return if the range is empty.
+  if (haystack.empty()) {
+    return std::string::npos;
+  }
   auto pos = static_cast<const char*>(
     ::memrchr(haystack.data(), needle, haystack.size()));
   return pos == nullptr ? std::string::npos : pos - haystack.data();
 }
-#endif
 
 // specialization for ByteRange
 template <>
 inline size_t qfind(const Range<const unsigned char*>& haystack,
                     const unsigned char& needle) {
+  // memchr expects a not-null pointer, early return if the range is empty.
+  if (haystack.empty()) {
+    return std::string::npos;
+  }
   auto pos = static_cast<const unsigned char*>(
     ::memchr(haystack.data(), needle, haystack.size()));
   return pos == nullptr ? std::string::npos : pos - haystack.data();
 }
 
-#if FOLLY_HAVE_MEMRCHR
 template <>
 inline size_t rfind(const Range<const unsigned char*>& haystack,
                     const unsigned char& needle) {
+  // memchr expects a not-null pointer, early return if the range is empty.
+  if (haystack.empty()) {
+    return std::string::npos;
+  }
   auto pos = static_cast<const unsigned char*>(
     ::memrchr(haystack.data(), needle, haystack.size()));
   return pos == nullptr ? std::string::npos : pos - haystack.data();
 }
-#endif
 
 template <class T>
 size_t qfind_first_of(const Range<T>& haystack,
                       const Range<T>& needles) {
-  return qfind_first_of(haystack, needles, asciiCaseSensitive);
+  return qfind_first_of(haystack, needles, AsciiCaseSensitive());
 }
 
 // specialization for StringPiece
@@ -1144,10 +1162,16 @@ struct hasher<folly::Range<T*>,
   }
 };
 
+/**
+ * Ubiquitous helper template for knowing what's a string
+ */
+template <class T> struct IsSomeString {
+  enum { value = std::is_same<T, std::string>::value
+         || std::is_same<T, fbstring>::value };
+};
+
 }  // !namespace folly
 
 #pragma GCC diagnostic pop
 
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(folly::Range);
-
-#endif // FOLLY_RANGE_H_

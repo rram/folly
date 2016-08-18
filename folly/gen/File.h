@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_GEN_FILE_H
-#define FOLLY_GEN_FILE_H
+#pragma once
+#define FOLLY_GEN_FILE_H_
 
 #include <folly/File.h>
 #include <folly/gen/Base.h>
@@ -68,5 +68,3 @@ S toFile(File file, std::unique_ptr<IOBuf> buffer) {
 }}  // !folly::gen
 
 #include <folly/gen/File-inl.h>
-
-#endif // FOLLY_GEN_FILE_H

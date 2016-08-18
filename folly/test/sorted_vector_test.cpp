@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,14 +17,15 @@
 #include <folly/sorted_vector_types.h>
 #include <gtest/gtest.h>
 #include <list>
+#include <memory>
 
 using folly::sorted_vector_set;
 using folly::sorted_vector_map;
 
 namespace {
 
-template<class T>
-struct less_invert : std::binary_function<T,T,bool> {
+template <class T>
+struct less_invert {
   bool operator()(const T& a, const T& b) const {
     return b < a;
   }

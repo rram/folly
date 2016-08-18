@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,14 @@
  */
 
 #include <folly/io/IOBufQueue.h>
-#include <folly/Range.h>
-
-#include <gflags/gflags.h>
-#include <gtest/gtest.h>
 
 #include <iostream>
 #include <stdexcept>
 #include <string.h>
+
+#include <gtest/gtest.h>
+
+#include <folly/Range.h>
 
 using folly::IOBuf;
 using folly::IOBufQueue;
@@ -49,7 +49,7 @@ stringToIOBuf(const char* s, uint32_t len) {
   unique_ptr<IOBuf> buf = IOBuf::create(len);
   memcpy(buf->writableTail(), s, len);
   buf->append(len);
-  return std::move(buf);
+  return buf;
 }
 
 void checkConsistency(const IOBufQueue& queue) {
@@ -156,7 +156,6 @@ TEST(IOBufQueue, Split) {
   queue.append(stringToIOBuf(SCL("Hello,")));
   queue.append(stringToIOBuf(SCL(" World")));
   checkConsistency(queue);
-  bool exceptionFired = false;
   EXPECT_THROW({prefix = queue.split(13);}, std::underflow_error);
   checkConsistency(queue);
 }
@@ -385,11 +384,4 @@ TEST(IOBufQueue, AppendToString) {
   std::string s;
   queue.appendToString(s);
   EXPECT_EQ("hello world", s);
-}
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-
-  return RUN_ALL_TESTS();
 }

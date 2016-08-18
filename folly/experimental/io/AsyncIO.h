@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_IO_ASYNCIO_H_
-#define FOLLY_IO_ASYNCIO_H_
+#pragma once
 
 #include <sys/types.h>
-#include <sys/uio.h>
 #include <libaio.h>
 
 #include <atomic>
@@ -34,6 +32,7 @@
 
 #include <folly/Portability.h>
 #include <folly/Range.h>
+#include <folly/portability/SysUio.h>
 
 namespace folly {
 
@@ -251,5 +250,3 @@ class AsyncIOQueue {
 };
 
 }  // namespace folly
-
-#endif /* FOLLY_IO_ASYNCIO_H_ */

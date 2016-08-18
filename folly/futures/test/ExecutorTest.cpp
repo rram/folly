@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -106,6 +106,34 @@ TEST(ManualExecutor, waitForDoesNotDeadlock) {
   t.join();
 }
 
+TEST(ManualExecutor, getViaDoesNotDeadlock) {
+  ManualExecutor east, west;
+  folly::Baton<> baton;
+  auto f = makeFuture().via(&east).then([](Try<Unit>) {
+    return makeFuture();
+  }).via(&west);
+  std::thread t([&] {
+    baton.post();
+    f.getVia(&west);
+  });
+  baton.wait();
+  east.run();
+  t.join();
+}
+
+TEST(ManualExecutor, clear) {
+  ManualExecutor x;
+  size_t count = 0;
+  x.add([&] { ++count; });
+  x.scheduleAt([&] { ++count; }, x.now() + std::chrono::milliseconds(10));
+  EXPECT_EQ(0, count);
+
+  x.clear();
+  x.advance(std::chrono::milliseconds(10));
+  x.run();
+  EXPECT_EQ(0, count);
+}
+
 TEST(Executor, InlineExecutor) {
   InlineExecutor x;
   size_t counter = 0;
@@ -170,9 +198,7 @@ TEST(Executor, ThrowableThen) {
 
 class CrappyExecutor : public Executor {
  public:
-  void add(Func f) override {
-    throw std::runtime_error("bad");
-  }
+  void add(Func /* f */) override { throw std::runtime_error("bad"); }
 };
 
 TEST(Executor, CrappyExecutor) {
@@ -183,4 +209,31 @@ TEST(Executor, CrappyExecutor) {
     flag = true;
   });
   EXPECT_TRUE(flag);
+}
+
+class DoNothingExecutor : public Executor {
+ public:
+  void add(Func f) override {
+    storedFunc_ = std::move(f);
+  }
+
+ private:
+  Func storedFunc_;
+};
+
+TEST(Executor, DoNothingExecutor) {
+  DoNothingExecutor x;
+
+  // Submit future callback to DoNothingExecutor
+  auto f = folly::via(&x).then([] { return 42; });
+
+  // Callback function is stored in DoNothingExecutor, but not executed.
+  EXPECT_FALSE(f.isReady());
+
+  // Destroy the function stored in DoNothingExecutor. The future callback
+  // will never get executed.
+  x.add({});
+
+  EXPECT_TRUE(f.isReady());
+  EXPECT_THROW(f.get(), folly::BrokenPromise);
 }

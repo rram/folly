@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include <folly/ScopeGuard.h>
 #include <folly/Portability.h>
 
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 #include <glog/logging.h>
 
@@ -291,8 +290,21 @@ TEST(ScopeGuard, TEST_SCOPE_SUCCESS_THROW) {
   EXPECT_THROW(lambda(), std::runtime_error);
 }
 
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
+TEST(ScopeGuard, TEST_THROWING_CLEANUP_ACTION) {
+  struct ThrowingCleanupAction {
+    explicit ThrowingCleanupAction(int& scopeExitExecuted)
+        : scopeExitExecuted_(scopeExitExecuted) {}
+    ThrowingCleanupAction(const ThrowingCleanupAction& other)
+        : scopeExitExecuted_(other.scopeExitExecuted_) {
+      throw std::runtime_error("whoa");
+    }
+    void operator()() { ++scopeExitExecuted_; }
+
+   private:
+    int& scopeExitExecuted_;
+  };
+  int scopeExitExecuted = 0;
+  ThrowingCleanupAction onExit(scopeExitExecuted);
+  EXPECT_THROW(makeGuard(onExit), std::runtime_error);
+  EXPECT_EQ(scopeExitExecuted, 1);
 }

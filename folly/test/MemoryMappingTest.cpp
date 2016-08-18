@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
-#include <sys/mman.h>
 #include <cstdlib>
+
 #include <folly/FileUtil.h>
 #include <folly/MemoryMapping.h>
+#include <folly/portability/SysMman.h>
+
 #include <gtest/gtest.h>
 
 namespace folly {

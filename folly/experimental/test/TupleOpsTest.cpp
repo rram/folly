@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -80,7 +80,7 @@ template <class U, class T> struct TupleTo;
 // Base case: empty typle -> empty tuple
 template <>
 struct TupleTo<std::tuple<>, std::tuple<>> {
-  static std::tuple<> convert(const std::tuple<>& input) {
+  static std::tuple<> convert(const std::tuple<>& /* input */) {
     return std::make_tuple();
   }
 };

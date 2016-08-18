@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -306,8 +306,7 @@ double prettyToDouble(folly::StringPiece *const prettyString,
 
 double prettyToDouble(folly::StringPiece prettyString, const PrettyType type){
   double result = prettyToDouble(&prettyString, type);
-  detail::enforceWhitespace(prettyString.data(),
-                            prettyString.data() + prettyString.size());
+  detail::enforceWhitespace(prettyString);
   return result;
 }
 
@@ -547,6 +546,50 @@ size_t hexDumpLine(const void* ptr, size_t offset, size_t size,
 }
 
 } // namespace detail
+
+std::string stripLeftMargin(std::string s) {
+  std::vector<StringPiece> pieces;
+  split("\n", s, pieces);
+  auto piecer = range(pieces);
+
+  auto piece = (piecer.end() - 1);
+  auto needle = std::find_if(piece->begin(),
+                             piece->end(),
+                             [](char c) { return c != ' ' && c != '\t'; });
+  if (needle == piece->end()) {
+    (piecer.end() - 1)->clear();
+  }
+  piece = piecer.begin();
+  needle = std::find_if(piece->begin(),
+                        piece->end(),
+                        [](char c) { return c != ' ' && c != '\t'; });
+  if (needle == piece->end()) {
+    piecer.erase(piecer.begin(), piecer.begin() + 1);
+  }
+
+  const auto sentinel = std::numeric_limits<size_t>::max();
+  auto indent = sentinel;
+  size_t max_length = 0;
+  for (piece = piecer.begin(); piece != piecer.end(); piece++) {
+    needle = std::find_if(piece->begin(),
+                          piece->end(),
+                          [](char c) { return c != ' ' && c != '\t'; });
+    if (needle != piece->end()) {
+      indent = std::min<size_t>(indent, needle - piece->begin());
+    } else {
+      max_length = std::max<size_t>(piece->size(), max_length);
+    }
+  }
+  indent = indent == sentinel ? max_length : indent;
+  for (piece = piecer.begin(); piece != piecer.end(); piece++) {
+    if (piece->size() < indent) {
+      piece->clear();
+    } else {
+      piece->erase(piece->begin(), piece->begin() + indent);
+    }
+  }
+  return join("\n", piecer);
+}
 
 }   // namespace folly
 

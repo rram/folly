@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,16 +18,19 @@
 
 #include <folly/io/async/EventBase.h>
 #include <folly/Likely.h>
+#include <folly/portability/Fcntl.h>
+#include <folly/portability/Sockets.h>
+#include <folly/portability/Unistd.h>
 
 #include <errno.h>
-#include <unistd.h>
-#include <fcntl.h>
 
 // Due to the way kernel headers are included, this may or may not be defined.
 // Number pulled from 3.10 kernel headers.
 #ifndef SO_REUSEPORT
 #define SO_REUSEPORT 15
 #endif
+
+namespace fsp = folly::portability::sockets;
 
 namespace folly {
 
@@ -46,7 +49,7 @@ AsyncUDPSocket::~AsyncUDPSocket() {
 }
 
 void AsyncUDPSocket::bind(const folly::SocketAddress& address) {
-  int socket = ::socket(address.getFamily(), SOCK_DGRAM, IPPROTO_UDP);
+  int socket = fsp::socket(address.getFamily(), SOCK_DGRAM, IPPROTO_UDP);
   if (socket == -1) {
     throw AsyncSocketException(AsyncSocketException::NOT_OPEN,
                               "error creating async udp socket",
@@ -96,8 +99,7 @@ void AsyncUDPSocket::bind(const folly::SocketAddress& address) {
   // If we're using IPv6, make sure we don't accept V4-mapped connections
   if (address.getFamily() == AF_INET6) {
     int flag = 1;
-    if (::setsockopt(socket, IPPROTO_IPV6, IPV6_V6ONLY,
-                     &flag, sizeof(flag))) {
+    if (setsockopt(socket, IPPROTO_IPV6, IPV6_V6ONLY, &flag, sizeof(flag))) {
       throw AsyncSocketException(
         AsyncSocketException::NOT_OPEN,
         "Failed to set IPV6_V6ONLY",
@@ -109,7 +111,7 @@ void AsyncUDPSocket::bind(const folly::SocketAddress& address) {
   sockaddr_storage addrStorage;
   address.getAddress(&addrStorage);
   sockaddr* saddr = reinterpret_cast<sockaddr*>(&addrStorage);
-  if (::bind(socket, saddr, address.getActualSize()) != 0) {
+  if (fsp::bind(socket, saddr, address.getActualSize()) != 0) {
     throw AsyncSocketException(
         AsyncSocketException::NOT_OPEN,
         "failed to bind the async udp socket for:" + address.describe(),
@@ -251,7 +253,7 @@ void AsyncUDPSocket::handleRead() noexcept {
   struct sockaddr* rawAddr = reinterpret_cast<sockaddr*>(&addrStorage);
   rawAddr->sa_family = localAddress_.getFamily();
 
-  ssize_t bytesRead = ::recvfrom(fd_, buf, len, MSG_TRUNC, rawAddr, &addrLen);
+  ssize_t bytesRead = recvfrom(fd_, buf, len, MSG_TRUNC, rawAddr, &addrLen);
   if (bytesRead >= 0) {
     clientAddress_.setFromSockaddr(rawAddr, addrLen);
 

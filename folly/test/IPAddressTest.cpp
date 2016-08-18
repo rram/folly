@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,9 @@
 
 #include <folly/Bits.h>
 #include <folly/Format.h>
-#include <folly/String.h>
 #include <folly/MacAddress.h>
+#include <folly/String.h>
+#include <folly/detail/IPAddressSource.h>
 
 using namespace folly;
 using namespace std;
@@ -219,6 +220,28 @@ TEST(IPAddress, CtorDefault) {
   EXPECT_EQ(IPAddressV6("::0"), v6);
 }
 
+TEST(IPAddressV4, validate) {
+  EXPECT_TRUE(IPAddressV4::validate("0.0.0.0"));
+  EXPECT_FALSE(IPAddressV4::validate("0.0.0."));
+  EXPECT_TRUE(IPAddressV4::validate("127.127.127.127"));
+}
+
+TEST(IPAddressV6, validate) {
+  EXPECT_TRUE(IPAddressV6::validate("2620:0:1cfe:face:b00c::3"));
+  EXPECT_FALSE(IPAddressV6::validate("0.0.0.0"));
+  EXPECT_TRUE(IPAddressV6::validate("[2620:0:1cfe:face:b00c::3]"));
+  EXPECT_TRUE(IPAddressV6::validate("::ffff:0.1.1.1"));
+  EXPECT_TRUE(IPAddressV6::validate("2620:0000:1cfe:face:b00c:0000:0000:0003"));
+  EXPECT_TRUE(
+      IPAddressV6::validate("2620:0000:1cfe:face:b00c:0000:127.127.127.127"));
+}
+
+TEST(IPAddress, validate) {
+  EXPECT_TRUE(IPAddress::validate("0.0.0.0"));
+  EXPECT_TRUE(IPAddress::validate("::"));
+  EXPECT_FALSE(IPAddress::validate("asdf"));
+}
+
 // Test addresses constructed using a in[6]_addr value
 TEST_P(IPAddressTest, CtorAddress) {
   AddressData param = GetParam();
@@ -398,6 +421,14 @@ TEST_P(IPAddressCtorBinaryTest, InvalidBinary) {
                IPAddressFormatException);
 }
 
+TEST(IPAddressSource, ToHex) {
+  vector<std::uint8_t> data = {{0xff, 0x20, 0x45}};
+  EXPECT_EQ(detail::Bytes::toHex(data.data(), 0), "");
+  EXPECT_EQ(detail::Bytes::toHex(data.data(), 1), "ff");
+  EXPECT_EQ(detail::Bytes::toHex(data.data(), 2), "ff20");
+  EXPECT_EQ(detail::Bytes::toHex(data.data(), 3), "ff2045");
+}
+
 // Test toFullyQualified()
 TEST(IPAddress, ToFullyQualifiedFb) {
   IPAddress ip("2620:0:1cfe:face:b00c::3");
@@ -444,8 +475,8 @@ TEST_P(IPAddressMaskTest, Masks) {
   IPAddress ip(param.address);
   IPAddress masked = ip.mask(param.mask);
   EXPECT_EQ(param.subnet, masked.str())
-      << param.address << "/" << to_string(param.mask)
-      << " -> " << param.subnet;
+      << param.address << "/" << folly::to<std::string>(param.mask) << " -> "
+      << param.subnet;
 }
 
 // Test inSubnet calculations
@@ -500,19 +531,35 @@ TEST(IPAddress, InSubnetWith6to4) {
   EXPECT_TRUE(ip3.inSubnet(subnet3, 16));
 }
 
-static vector<pair<string, uint8_t> > invalidMasks = {
+static const vector<string> ipv4Strs = {
+  "127.0.0.1",
+  "198.168.0.1",
+  "8.8.0.0",
+};
+TEST(IPAddress, getIPv6For6To4) {
+  for (auto ipv4Str : ipv4Strs) {
+    auto ip = IPAddress(ipv4Str);
+    EXPECT_TRUE(ip.isV4());
+    IPAddressV4 ipv4 = ip.asV4();
+    auto ipv6 = ipv4.getIPv6For6To4();
+    EXPECT_EQ(ipv6.type(), IPAddressV6::Type::T6TO4);
+    auto ipv4New = ipv6.getIPv4For6To4();
+    EXPECT_TRUE(ipv4Str.compare(ipv4New.str()) == 0);
+  }
+}
+
+static const vector<pair<string, uint8_t> > invalidMasks = {
   {"127.0.0.1", 33},
   {"::1", 129},
 };
 TEST(IPAddress, InvalidMask) {
   for (auto& tc : invalidMasks) {
-    uint8_t mask = tc.second;
     auto ip = IPAddress(tc.first);
     EXPECT_THROW(ip.mask(tc.second), IPAddressFormatException);
   }
 }
 
-static vector<pair<string, IPAddressV6::Type> > v6types = {
+static const vector<pair<string, IPAddressV6::Type> > v6types = {
   {"::1", IPAddressV6::Type::NORMAL},
   {"2620:0:1cfe:face:b00c::3", IPAddressV6::Type::NORMAL},
   {"2001:0000:4136:e378:8000:63bf:3fff:fdd2", IPAddressV6::Type::TEREDO},
@@ -551,12 +598,12 @@ TEST(IPAddress, V6Types) {
         break;
       default:
         throw std::range_error("Invalid expected type: " +
-                               to_string(tc.second));
+                               folly::to<std::string>(tc.second));
     }
   }
 }
 
-static vector<pair<string, uint32_t> > provideToLong = {
+static const vector<pair<string, uint32_t> > provideToLong = {
   {"0.0.0.0", 0},
   {"10.0.0.0", 167772160},
   {"126.131.128.23", 2122547223},
@@ -615,7 +662,23 @@ TEST(IPAddress, fromBinaryV4) {
                IPAddressFormatException);
 }
 
-static vector<pair<string, vector<uint8_t> > > provideBinary16Bytes = {
+TEST(IPAddress, toBinaryV4) {
+  for (auto& tc : provideToLong) {
+    SCOPED_TRACE(tc.first);
+    union {
+      uint8_t u8[4];
+      uint32_t u32;
+    } data;
+    data.u32 = Endian::big(tc.second);
+    ByteRange bytes(data.u8, 4);
+
+    auto fromBin = IPAddressV4::fromBinary(bytes);
+    auto toBin = fromBin.toBinary();
+    EXPECT_EQ(bytes, toBin);
+  }
+}
+
+static const vector<pair<string, vector<uint8_t> > > provideBinary16Bytes = {
   {"::0",
     {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
@@ -659,6 +722,17 @@ TEST(IPAddress, fromBinaryV6) {
                IPAddressFormatException);
   EXPECT_THROW(IPAddressV6::fromBinary(ByteRange(data, 20)),
                IPAddressFormatException);
+}
+
+TEST(IPAddress, toBinaryV6) {
+  for (auto& tc : provideBinary16Bytes) {
+    SCOPED_TRACE(tc.first);
+    ByteRange bytes(&tc.second.front(), tc.second.size());
+
+    auto fromBin = IPAddressV6::fromBinary(bytes);
+    auto toBin = fromBin.toBinary();
+    EXPECT_EQ(bytes, toBin);
+  }
 }
 
 TEST_P(IPAddressFlagTest, IsLoopback) {
@@ -911,7 +985,7 @@ TEST(IPAddress, LongestCommonPrefix) {
 
 }
 
-static vector<AddressData> validAddressProvider = {
+static const vector<AddressData> validAddressProvider = {
   AddressData("127.0.0.1", {127,0,0,1}, 4),
   AddressData("69.63.189.16", {69,63,189,16}, 4),
   AddressData("0.0.0.0", {0,0,0,0}, 4),
@@ -921,7 +995,7 @@ static vector<AddressData> validAddressProvider = {
               {38,32,0,0,28,254,250,206,176,12,0,0,0,0,0,3}, 6),
 };
 
-static vector<string> invalidAddressProvider = {
+static const vector<string> invalidAddressProvider = {
   "",
   "foo",
   "1.1.1.256",
@@ -931,7 +1005,7 @@ static vector<string> invalidAddressProvider = {
   "[1234]",
 };
 
-static vector<ByteVector> invalidBinaryProvider = {
+static const vector<ByteVector> invalidBinaryProvider = {
   {0x31, 0x32, 0x37, 0x2e, 0x30, 0x30, 0x2e, 0x30, 0x2e, 0x31},
   // foo
   {0x66, 0x6f, 0x6f},
@@ -1027,7 +1101,7 @@ static vector<AddressFlags> flagProvider = {
   AddressFlags("ff02::1", 6, IS_NONROUTABLE | IS_LINK_LOCAL_BROADCAST),
 };
 
-static vector<pair<string, string> > mapProvider = {
+static const vector<pair<string, string> > mapProvider = {
   {"::ffff:192.0.2.128", "192.0.2.128"},
   {"192.0.2.128", "::ffff:192.0.2.128"},
   {"::FFFF:129.144.52.38", "129.144.52.38"},
@@ -1036,7 +1110,7 @@ static vector<pair<string, string> > mapProvider = {
   {"::FFFF:222.1.41.90", "222.1.41.90"},
 };
 
-static vector<MaskData> masksProvider = {
+static const vector<MaskData> masksProvider = {
   MaskData("255.255.255.255", 1, "128.0.0.0"),
   MaskData("255.255.255.255", 2, "192.0.0.0"),
   MaskData("192.0.2.42", 16, "192.0.0.0"),
@@ -1080,7 +1154,7 @@ static vector<MaskData> masksProvider = {
   MaskData("2620:0:1cfe:face:b00c::3", 0, "::")
 };
 
-static vector<MaskBoundaryData> maskBoundaryProvider = {
+static const vector<MaskBoundaryData> maskBoundaryProvider = {
   MaskBoundaryData("10.1.1.1", 24, "10.1.1.1", true),
   MaskBoundaryData("10.1.1.1", 8, "10.1.2.3", true),
   MaskBoundaryData("2620:0:1cfe:face:b00c::1", 48, "2620:0:1cfe::", true),

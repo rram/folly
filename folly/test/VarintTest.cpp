@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -163,7 +163,6 @@ void generateRandomValues() {
 BENCHMARK(VarintEncoding, iters) {
   uint8_t* start = &(*gEncoded.begin());
   uint8_t* p = start;
-  bool empty = (iters == 0);
   while (iters--) {
     p = start;
     for (auto& v : gValues) {

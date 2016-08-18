@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -52,32 +52,26 @@
  * @author Tudor Bosman (tudorb@fb.com)
  */
 
-#ifndef FOLLY_BITS_H_
-#define FOLLY_BITS_H_
+#pragma once
 
-#if !defined(__clang__) && !defined(_MSC_VER)
+#if !defined(__clang__) && !(defined(_MSC_VER) && (_MSC_VER < 1900))
 #define FOLLY_INTRINSIC_CONSTEXPR constexpr
 #else
-// GCC is the only compiler with intrinsics constexpr.
+// GCC and MSVC 2015+ are the only compilers with
+// intrinsics constexpr.
 #define FOLLY_INTRINSIC_CONSTEXPR const
 #endif
 
 #include <folly/Portability.h>
+#include <folly/portability/Builtins.h>
 
+#include <folly/Assume.h>
 #include <folly/detail/BitsDetail.h>
 #include <folly/detail/BitIteratorDetail.h>
 #include <folly/Likely.h>
 
 #if FOLLY_HAVE_BYTESWAP_H
 # include <byteswap.h>
-#endif
-
-#ifdef _MSC_VER
-# include <intrin.h>
-# pragma intrinsic(_BitScanForward)
-# pragma intrinsic(_BitScanForward64)
-# pragma intrinsic(_BitScanReverse)
-# pragma intrinsic(_BitScanReverse64)
 #endif
 
 #include <cassert>
@@ -100,12 +94,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned int)),
   unsigned int>::type
   findFirstSet(T x) {
-#ifdef _MSC_VER
-  unsigned long index;
-  return _BitScanForward(&index, x) ? index : 0;
-#else
   return __builtin_ffs(x);
-#endif
 }
 
 template <class T>
@@ -117,12 +106,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long)),
   unsigned int>::type
   findFirstSet(T x) {
-#ifdef _MSC_VER
-  unsigned long index;
-  return _BitScanForward(&index, x) ? index : 0;
-#else
   return __builtin_ffsl(x);
-#endif
 }
 
 template <class T>
@@ -134,12 +118,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long long)),
   unsigned int>::type
   findFirstSet(T x) {
-#ifdef _MSC_VER
-  unsigned long index;
-  return _BitScanForward64(&index, x) ? index : 0;
-#else
   return __builtin_ffsll(x);
-#endif
 }
 
 template <class T>
@@ -164,18 +143,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned int)),
   unsigned int>::type
   findLastSet(T x) {
-#ifdef _MSC_VER
-  unsigned long index;
-  int clz;
-  if (_BitScanReverse(&index, x)) {
-    clz = static_cast<int>(31 - index);
-  } else {
-    clz = 32;
-  }
-  return x ? 8 * sizeof(unsigned int) - clz : 0;
-#else
   return x ? 8 * sizeof(unsigned int) - __builtin_clz(x) : 0;
-#endif
 }
 
 template <class T>
@@ -187,18 +155,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long)),
   unsigned int>::type
   findLastSet(T x) {
-#ifdef _MSC_VER
-  unsigned long index;
-  int clz;
-  if (_BitScanReverse(&index, x)) {
-    clz = static_cast<int>(31 - index);
-  } else {
-    clz = 32;
-  }
-  return x ? 8 * sizeof(unsigned int) - clz : 0;
-#else
   return x ? 8 * sizeof(unsigned long) - __builtin_clzl(x) : 0;
-#endif
 }
 
 template <class T>
@@ -210,18 +167,7 @@ typename std::enable_if<
    sizeof(T) <= sizeof(unsigned long long)),
   unsigned int>::type
   findLastSet(T x) {
-#ifdef _MSC_VER
-  unsigned long index;
-  unsigned long long clz;
-  if (_BitScanReverse(&index, x)) {
-    clz = static_cast<unsigned long long>(63 - index);
-  } else {
-    clz = 64;
-  }
-  return x ? 8 * sizeof(unsigned long long) - clz : 0;
-#else
   return x ? 8 * sizeof(unsigned long long) - __builtin_clzll(x) : 0;
-#endif
 }
 
 template <class T>
@@ -240,7 +186,7 @@ typename std::enable_if<
   std::is_integral<T>::value && std::is_unsigned<T>::value,
   T>::type
 nextPowTwo(T v) {
-  return v ? (1ul << findLastSet(v - 1)) : 1;
+  return v ? (T(1) << findLastSet(v - 1)) : 1;
 }
 
 template <class T>
@@ -334,27 +280,16 @@ FB_GEN(uint16_t, our_bswap16)
 
 #undef FB_GEN
 
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-
 template <class T>
-struct EndianInt : public detail::EndianIntBase<T> {
+struct EndianInt : public EndianIntBase<T> {
  public:
-  static T big(T x) { return EndianInt::swap(x); }
-  static T little(T x) { return x; }
+  static T big(T x) {
+    return kIsLittleEndian ? EndianInt::swap(x) : x;
+  }
+  static T little(T x) {
+    return kIsBigEndian ? EndianInt::swap(x) : x;
+  }
 };
-
-#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-
-template <class T>
-struct EndianInt : public detail::EndianIntBase<T> {
- public:
-  static T big(T x) { return x; }
-  static T little(T x) { return EndianInt::swap(x); }
-};
-
-#else
-# error Your machine uses a weird endianness!
-#endif  /* __BYTE_ORDER__ */
 
 }  // namespace detail
 
@@ -383,23 +318,16 @@ class Endian {
     BIG
   };
 
-  static constexpr Order order =
-#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-    Order::LITTLE;
-#elif __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-    Order::BIG;
-#else
-# error Your machine uses a weird endianness!
-#endif  /* __BYTE_ORDER__ */
+  static constexpr Order order = kIsLittleEndian ? Order::LITTLE : Order::BIG;
 
   template <class T> static T swap(T x) {
-    return detail::EndianInt<T>::swap(x);
+    return folly::detail::EndianInt<T>::swap(x);
   }
   template <class T> static T big(T x) {
-    return detail::EndianInt<T>::big(x);
+    return folly::detail::EndianInt<T>::big(x);
   }
   template <class T> static T little(T x) {
-    return detail::EndianInt<T>::little(x);
+    return folly::detail::EndianInt<T>::little(x);
   }
 
 #if !defined(__ANDROID__)
@@ -448,14 +376,11 @@ class BitIterator
    * Construct a BitIterator that points at a given bit offset (default 0)
    * in iter.
    */
-  #pragma GCC diagnostic push // bitOffset shadows a member
-  #pragma GCC diagnostic ignored "-Wshadow"
-  explicit BitIterator(const BaseIter& iter, size_t bitOffset=0)
+  explicit BitIterator(const BaseIter& iter, size_t bitOff=0)
     : bititerator_detail::BitIteratorBase<BaseIter>::type(iter),
-      bitOffset_(bitOffset) {
+      bitOffset_(bitOff) {
     assert(bitOffset_ < bitsPerBlock());
   }
-  #pragma GCC diagnostic pop
 
   size_t bitOffset() const {
     return bitOffset_;
@@ -605,7 +530,13 @@ template <class T>
 inline T loadUnaligned(const void* p) {
   static_assert(sizeof(Unaligned<T>) == sizeof(T), "Invalid unaligned size");
   static_assert(alignof(Unaligned<T>) == 1, "Invalid alignment");
-  return static_cast<const Unaligned<T>*>(p)->value;
+  if (kHasUnalignedAccess) {
+    return static_cast<const Unaligned<T>*>(p)->value;
+  } else {
+    T value;
+    memcpy(&value, p, sizeof(T));
+    return value;
+  }
 }
 
 /**
@@ -615,9 +546,17 @@ template <class T>
 inline void storeUnaligned(void* p, T value) {
   static_assert(sizeof(Unaligned<T>) == sizeof(T), "Invalid unaligned size");
   static_assert(alignof(Unaligned<T>) == 1, "Invalid alignment");
-  new (p) Unaligned<T>(value);
+  if (kHasUnalignedAccess) {
+    // Prior to C++14, the spec says that a placement new like this
+    // is required to check that p is not nullptr, and to do nothing
+    // if p is a nullptr. By assuming it's not a nullptr, we get a
+    // nice loud segfault in optimized builds if p is nullptr, rather
+    // than just silently doing nothing.
+    folly::assume(p != nullptr);
+    new (p) Unaligned<T>(value);
+  } else {
+    memcpy(p, &value, sizeof(T));
+  }
 }
 
 }  // namespace folly
-
-#endif /* FOLLY_BITS_H_ */

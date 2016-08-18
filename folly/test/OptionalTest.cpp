@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,14 @@
  */
 
 #include <folly/Optional.h>
+#include <folly/Portability.h>
 
 #include <memory>
 #include <vector>
 #include <algorithm>
 #include <iomanip>
 #include <string>
+#include <type_traits>
 
 #include <glog/logging.h>
 #include <gtest/gtest.h>
@@ -117,7 +119,11 @@ public:
     other.s_ = "";
   }
   MoveTester& operator=(const MoveTester&) = default;
-  MoveTester& operator=(MoveTester&&) = default;
+  MoveTester& operator=(MoveTester&& other) noexcept {
+    s_ = std::move(other.s_);
+    other.s_ = "";
+    return *this;
+  }
 private:
   friend bool operator==(const MoveTester& o1, const MoveTester& o2);
   std::string s_;
@@ -398,6 +404,7 @@ TEST(Optional, Conversions) {
 
   // intended explicit operator bool, for if (opt).
   bool b(mbool);
+  EXPECT_FALSE(b);
 
   // Truthy tests work and are not ambiguous
   if (mbool && mshort && mstr && mint) { // only checks not-empty
@@ -467,11 +474,9 @@ TEST(Optional, MakeOptional) {
   EXPECT_EQ(**optIntPtr, 3);
 }
 
-#ifdef __clang__
+#if __CLANG_PREREQ(3, 6)
 # pragma clang diagnostic push
-# if __clang_major__ > 3 || __clang_minor__ >= 6
-#  pragma clang diagnostic ignored "-Wself-move"
-# endif
+# pragma clang diagnostic ignored "-Wself-move"
 #endif
 
 TEST(Optional, SelfAssignment) {
@@ -484,8 +489,8 @@ TEST(Optional, SelfAssignment) {
   ASSERT_TRUE(b.hasValue() && b.value() == 23333333);
 }
 
-#ifdef __clang__
-#pragma clang diagnostic pop
+#if __CLANG_PREREQ(3, 6)
+# pragma clang diagnostic pop
 #endif
 
 class ContainsOptional {
@@ -537,4 +542,21 @@ TEST(Optional, Exceptions) {
   EXPECT_THROW(empty.value(), OptionalEmptyException);
 }
 
+TEST(Optional, NoThrowDefaultConstructible) {
+  EXPECT_TRUE(std::is_nothrow_default_constructible<Optional<bool>>::value);
+}
+
+struct NoDestructor {};
+
+struct WithDestructor {
+  ~WithDestructor();
+};
+
+TEST(Optional, TriviallyDestructible) {
+  // These could all be static_asserts but EXPECT_* give much nicer output on
+  // failure.
+  EXPECT_TRUE(std::is_trivially_destructible<Optional<NoDestructor>>::value);
+  EXPECT_TRUE(std::is_trivially_destructible<Optional<int>>::value);
+  EXPECT_FALSE(std::is_trivially_destructible<Optional<WithDestructor>>::value);
+}
 }

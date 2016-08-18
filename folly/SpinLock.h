@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,25 @@
  * limitations under the License.
  */
 
+/*
+ * N.B. You most likely do _not_ want to use SpinLock or any other
+ * kind of spinlock.  Use std::mutex instead.
+ *
+ * In short, spinlocks in preemptive multi-tasking operating systems
+ * have serious problems and fast mutexes like std::mutex are almost
+ * certainly the better choice, because letting the OS scheduler put a
+ * thread to sleep is better for system responsiveness and throughput
+ * than wasting a timeslice repeatedly querying a lock held by a
+ * thread that's blocked, and you can't prevent userspace
+ * programs blocking.
+ *
+ * Spinlocks in an operating system kernel make much more sense than
+ * they do in userspace.
+ */
+
 #pragma once
+
+#include <type_traits>
 
 #include <folly/detail/SpinLockImpl.h>
 

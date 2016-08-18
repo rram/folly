@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,13 +21,13 @@
 #include <stdexcept>
 #include <vector>
 
-#include <folly/Optional.h>
-#include <folly/MicroSpinLock.h>
-
-#include <folly/futures/Try.h>
-#include <folly/futures/Promise.h>
-#include <folly/futures/Future.h>
 #include <folly/Executor.h>
+#include <folly/Function.h>
+#include <folly/MicroSpinLock.h>
+#include <folly/Optional.h>
+#include <folly/futures/Future.h>
+#include <folly/futures/Promise.h>
+#include <folly/Try.h>
 #include <folly/futures/detail/FSM.h>
 
 #include <folly/io/async/Request.h>
@@ -73,7 +73,7 @@ enum class State : uint8_t {
 /// doesn't access a Future or Promise object from more than one thread at a
 /// time there won't be any problems.
 template<typename T>
-class Core {
+class Core final {
   static_assert(!std::is_void<T>::value,
                 "void futures are not supported. Use Unit instead.");
  public:
@@ -98,6 +98,26 @@ class Core {
   // not movable (see comment in the implementation of Future::then)
   Core(Core&&) noexcept = delete;
   Core& operator=(Core&&) = delete;
+
+  // Core is assumed to be convertible only if the type is convertible
+  // and the size is the same. This is a compromise for the complexity
+  // of having to make Core truly have a conversion constructor which
+  // would cause various other problems.
+  // If we made Core move constructible then we would need to update the
+  // Promise and Future with the location of the new Core. This is complex
+  // and may be inefficient.
+  // Core should only be modified so that for size(T) == size(U),
+  // sizeof(Core<T>) == size(Core<U>).
+  // This assumption is used as a proxy to make sure that
+  // the members of Core<T> and Core<U> line up so that we can use a
+  // reinterpret cast.
+  template <
+      class U,
+      typename = typename std::enable_if<std::is_convertible<U, T>::value &&
+                                         sizeof(U) == sizeof(T)>::type>
+  static Core<T>* convert(Core<U>* from) {
+    return reinterpret_cast<Core<T>*>(from);
+  }
 
   /// May call from any thread
   bool hasResult() const {
@@ -127,34 +147,13 @@ class Core {
     }
   }
 
-  template <typename F>
-  class LambdaBufHelper {
-   public:
-    template <typename FF>
-    explicit LambdaBufHelper(FF&& func) : func_(std::forward<FF>(func)) {}
-    void operator()(Try<T>&& t) {
-      SCOPE_EXIT { this->~LambdaBufHelper(); };
-      func_(std::move(t));
-    }
-   private:
-    F func_;
-  };
-
   /// Call only from Future thread.
   template <typename F>
-  void setCallback(F func) {
+  void setCallback(F&& func) {
     bool transitionToArmed = false;
     auto setCallback_ = [&]{
       context_ = RequestContext::saveContext();
-
-      // Move the lambda into the Core if it fits
-      if (sizeof(LambdaBufHelper<F>) <= lambdaBufSize) {
-        auto funcLoc = reinterpret_cast<LambdaBufHelper<F>*>(&lambdaBuf_);
-        new (funcLoc) LambdaBufHelper<F>(std::forward<F>(func));
-        callback_ = std::ref(*funcLoc);
-      } else {
-        callback_ = std::move(func);
-      }
+      callback_ = std::forward<F>(func);
     };
 
     FSM_START(fsm_)
@@ -216,7 +215,7 @@ class Core {
     // detachPromise() and setResult() should never be called in parallel
     // so we don't need to protect this.
     if (UNLIKELY(!result_)) {
-      setResult(Try<T>(exception_wrapper(BrokenPromise())));
+      setResult(Try<T>(exception_wrapper(BrokenPromise(typeid(T).name()))));
     }
     detachOne();
   }
@@ -301,7 +300,55 @@ class Core {
     interruptHandler_ = std::move(fn);
   }
 
- protected:
+ private:
+  class CountedReference {
+   public:
+    ~CountedReference() {
+      if (core_) {
+        core_->detachOne();
+        core_ = nullptr;
+      }
+    }
+
+    explicit CountedReference(Core* core) noexcept : core_(core) {
+      // do not construct a CountedReference from nullptr!
+      DCHECK(core);
+
+      ++core_->attached_;
+    }
+
+    // CountedReference must be copy-constructable as long as
+    // folly::Executor::add takes a std::function
+    CountedReference(CountedReference const& o) noexcept : core_(o.core_) {
+      if (core_) {
+        ++core_->attached_;
+      }
+    }
+
+    CountedReference& operator=(CountedReference const& o) noexcept {
+      ~CountedReference();
+      new (this) CountedReference(o);
+      return *this;
+    }
+
+    CountedReference(CountedReference&& o) noexcept {
+      std::swap(core_, o.core_);
+    }
+
+    CountedReference& operator=(CountedReference&& o) noexcept {
+      ~CountedReference();
+      new (this) CountedReference(std::move(o));
+      return *this;
+    }
+
+    Core* getCore() const noexcept {
+      return core_;
+    }
+
+   private:
+    Core* core_{nullptr};
+  };
+
   void maybeCallback() {
     FSM_START(fsm_)
       case State::Armed:
@@ -328,50 +375,55 @@ class Core {
     }
 
     if (x) {
-      // keep Core alive until executor did its thing
-      ++attached_;
       try {
         if (LIKELY(x->getNumPriorities() == 1)) {
-          x->add([this]() mutable {
-            SCOPE_EXIT { detachOne(); };
-            RequestContext::setContext(context_);
-            callback_(std::move(*result_));
+          x->add([core_ref = CountedReference(this)]() mutable {
+            auto cr = std::move(core_ref);
+            Core* const core = cr.getCore();
+            RequestContextScopeGuard rctx(core->context_);
+            SCOPE_EXIT { core->callback_ = {}; };
+            core->callback_(std::move(*core->result_));
           });
         } else {
-          x->addWithPriority([this]() mutable {
-            SCOPE_EXIT { detachOne(); };
-            RequestContext::setContext(context_);
-            callback_(std::move(*result_));
+          x->addWithPriority([core_ref = CountedReference(this)]() mutable {
+            auto cr = std::move(core_ref);
+            Core* const core = cr.getCore();
+            RequestContextScopeGuard rctx(core->context_);
+            SCOPE_EXIT { core->callback_ = {}; };
+            core->callback_(std::move(*core->result_));
           }, priority);
         }
       } catch (...) {
-        --attached_; // Account for extra ++attached_ before try
-        RequestContext::setContext(context_);
+        CountedReference core_ref(this);
+        RequestContextScopeGuard rctx(context_);
         result_ = Try<T>(exception_wrapper(std::current_exception()));
+        SCOPE_EXIT { callback_ = {}; };
         callback_(std::move(*result_));
       }
     } else {
-      RequestContext::setContext(context_);
+      CountedReference core_ref(this);
+      RequestContextScopeGuard rctx(context_);
+      SCOPE_EXIT { callback_ = {}; };
       callback_(std::move(*result_));
     }
   }
 
   void detachOne() {
-    auto a = --attached_;
-    assert(a >= 0);
-    assert(a <= 2);
-    if (a == 0) {
+    auto a = attached_--;
+    assert(a >= 1);
+    if (a == 1) {
       delete this;
     }
   }
 
-  // lambdaBuf occupies exactly one cache line
-  static constexpr size_t lambdaBufSize = 8 * sizeof(void*);
-  typename std::aligned_storage<lambdaBufSize>::type lambdaBuf_;
+  // Core should only be modified so that for size(T) == size(U),
+  // sizeof(Core<T>) == size(Core<U>).
+  // See Core::convert for details.
+
+  folly::Function<void(Try<T>&&)> callback_;
   // place result_ next to increase the likelihood that the value will be
   // contained entirely in one cache line
   folly::Optional<Try<T>> result_;
-  std::function<void(Try<T>&&)> callback_ {nullptr};
   FSM<State> fsm_;
   std::atomic<unsigned char> attached_;
   std::atomic<bool> active_ {true};
@@ -410,22 +462,41 @@ struct CollectVariadicContext {
          p.setException(std::move(t.exception()));
        }
      } else if (!threw) {
-       std::get<I>(results) = std::move(t.value());
+       std::get<I>(results) = std::move(t);
      }
   }
   ~CollectVariadicContext() {
     if (!threw.exchange(true)) {
-      p.setValue(std::move(results));
+      p.setValue(unwrap(std::move(results)));
     }
   }
   Promise<std::tuple<Ts...>> p;
-  std::tuple<Ts...> results;
+  std::tuple<folly::Try<Ts>...> results;
   std::atomic<bool> threw {false};
   typedef Future<std::tuple<Ts...>> type;
+
+ private:
+  template <typename... Ts2>
+  static std::tuple<Ts...> unwrap(std::tuple<folly::Try<Ts>...>&& o,
+                                  Ts2&&... ts2) {
+    static_assert(sizeof...(ts2) <
+                  std::tuple_size<std::tuple<folly::Try<Ts>...>>::value,
+                  "Non-templated unwrap should be used instead");
+    assert(std::get<sizeof...(ts2)>(o).hasValue());
+
+    return unwrap(std::move(o),
+                  std::forward<Ts2>(ts2)...,
+                  std::move(*std::get<sizeof...(ts2)>(o)));
+  }
+
+  static std::tuple<Ts...> unwrap(std::tuple<folly::Try<Ts>...>&& /* o */,
+                                  Ts&&... ts) {
+    return std::tuple<Ts...>(std::forward<Ts>(ts)...);
+  }
 };
 
-template <template <typename ...> class T, typename... Ts>
-void collectVariadicHelper(const std::shared_ptr<T<Ts...>>& ctx) {
+template <template <typename...> class T, typename... Ts>
+void collectVariadicHelper(const std::shared_ptr<T<Ts...>>& /* ctx */) {
   // base case
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +17,11 @@
 //
 // Author: andrei.alexandrescu@fb.com
 
+#include <folly/Foreach.h>
 #include <folly/Traits.h>
 #include <folly/Random.h>
 #include <folly/FBString.h>
 #include <folly/FBVector.h>
-
-#include <gflags/gflags.h>
 
 #include <gtest/gtest.h>
 #include <list>
@@ -33,11 +32,11 @@
 using namespace std;
 using namespace folly;
 
+namespace {
+
 auto static const seed = randomNumberSeed();
 typedef boost::mt19937 RandomT;
 static RandomT rng(seed);
-static const size_t maxString = 100;
-static const bool avoidAliasing = true;
 
 template <class Integral1, class Integral2>
 Integral2 random(Integral1 low, Integral2 up) {
@@ -55,19 +54,10 @@ void randomString(String* toFill, unsigned int maxSize = 1000) {
 }
 
 template <class String, class Integral>
-void Num2String(String& str, Integral n) {
+void Num2String(String& str, Integral /* n */) {
   str.resize(10, '\0');
   sprintf(&str[0], "%ul", 10);
   str.resize(strlen(str.c_str()));
-}
-
-std::list<char> RandomList(unsigned int maxSize) {
-  std::list<char> lst(random(0u, maxSize));
-  std::list<char>::iterator i = lst.begin();
-  for (; i != lst.end(); ++i) {
-    *i = random('a', 'z');
-  }
-  return lst;
 }
 
 template<class T> T randomObject();
@@ -75,11 +65,6 @@ template<class T> T randomObject();
 template<> int randomObject<int>() {
   return random(0, 1024);
 }
-
-template<> folly::fbstring randomObject<folly::fbstring>() {
-  folly::fbstring result;
-  randomString(&result);
-  return result;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -274,8 +259,12 @@ TEST(FBVector, vector_of_maps) {
   EXPECT_EQ(1, v[1].size());
 }
 
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
+TEST(FBVector, shrink_to_fit_after_clear) {
+  fbvector<int> fb1;
+  fb1.push_back(42);
+  fb1.push_back(1337);
+  fb1.clear();
+  fb1.shrink_to_fit();
+  EXPECT_EQ(fb1.size(), 0);
+  EXPECT_EQ(fb1.capacity(), 0);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -92,7 +92,7 @@ RandomDataHolder::RandomDataHolder(size_t sizeLog2)
     threads.emplace_back(
         [this, seed, t, numThreadsLog2, sizeLog2] () {
           std::mt19937 rng(seed + t);
-          size_t countLog2 = size_t(1) << (sizeLog2 - numThreadsLog2);
+          size_t countLog2 = sizeLog2 - numThreadsLog2;
           size_t start = size_t(t) << countLog2;
           for (size_t i = 0; i < countLog2; ++i) {
             this->data_[start + i] = rng();
@@ -128,6 +128,8 @@ TEST(CompressionTestNeedsUncompressedLength, Simple) {
   EXPECT_TRUE(getCodec(CodecType::LZMA2)->needsUncompressedLength());
   EXPECT_FALSE(getCodec(CodecType::LZMA2_VARINT_SIZE)
     ->needsUncompressedLength());
+  EXPECT_TRUE(getCodec(CodecType::ZSTD_BETA)->needsUncompressedLength());
+  EXPECT_FALSE(getCodec(CodecType::GZIP)->needsUncompressedLength());
 }
 
 class CompressionTest
@@ -180,7 +182,9 @@ INSTANTIATE_TEST_CASE_P(
                                      CodecType::ZLIB,
                                      CodecType::LZ4_VARINT_SIZE,
                                      CodecType::LZMA2,
-                                     CodecType::LZMA2_VARINT_SIZE)));
+                                     CodecType::LZMA2_VARINT_SIZE,
+                                     CodecType::ZSTD_BETA,
+                                     CodecType::GZIP)));
 
 class CompressionVarintTest
     : public testing::TestWithParam<std::tr1::tuple<int, CodecType>> {
@@ -209,7 +213,8 @@ void CompressionVarintTest::runSimpleTest(const DataHolder& dh) {
   auto compressed = codec_->compress(original.get());
   auto breakPoint =
       1UL +
-      Random::rand64(std::max(9UL, oneBasedMsbPos(uncompressedLength_)) / 9UL);
+      Random::rand64(
+          std::max(uint64_t(9), oneBasedMsbPos(uncompressedLength_)) / 9UL);
   auto tinyBuf = IOBuf::copyBuffer(compressed->data(),
                                    std::min(compressed->length(), breakPoint));
   compressed->trimStart(breakPoint);

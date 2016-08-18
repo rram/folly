@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,11 +75,36 @@ Future<typename std::decay<T>::type> makeFuture(T&& t);
 /** Make a completed void Future. */
 Future<Unit> makeFuture();
 
-/** Make a completed Future by executing a function. If the function throws
-  we capture the exception, otherwise we capture the result. */
+/**
+  Make a Future by executing a function.
+
+  If the function returns a value of type T, makeFutureWith
+  returns a completed Future<T>, capturing the value returned
+  by the function.
+
+  If the function returns a Future<T> already, makeFutureWith
+  returns just that.
+
+  Either way, if the function throws, a failed Future is
+  returned that captures the exception.
+
+  Calling makeFutureWith(func) is equivalent to calling
+  makeFuture().then(func).
+*/
+
+// makeFutureWith(Future<T>()) -> Future<T>
 template <class F>
-auto makeFutureWith(F&& func)
-    -> Future<typename Unit::Lift<decltype(func())>::type>;
+typename std::enable_if<isFuture<typename std::result_of<F()>::type>::value,
+                        typename std::result_of<F()>::type>::type
+makeFutureWith(F&& func);
+
+// makeFutureWith(T()) -> Future<T>
+// makeFutureWith(void()) -> Future<Unit>
+template <class F>
+typename std::enable_if<
+    !(isFuture<typename std::result_of<F()>::type>::value),
+    Future<typename Unit::Lift<typename std::result_of<F()>::type>::type>>::type
+makeFutureWith(F&& func);
 
 /// Make a failed Future from an exception_ptr.
 /// Because the Future's type cannot be inferred you have to specify it, e.g.
@@ -122,7 +147,7 @@ inline Future<Unit> via(
 /// This is semantically equivalent to via(executor).then(func), but
 /// easier to read and slightly more efficient.
 template <class Func>
-auto via(Executor*, Func func)
+auto via(Executor*, Func&& func)
   -> Future<typename isFuture<decltype(func())>::Inner>;
 
 /** When all the input Futures complete, the returned Future will complete.
@@ -342,7 +367,7 @@ retryingPolicyCappedJitteredExponentialBackoff(
     Duration backoff_min,
     Duration backoff_max,
     double jitter_param,
-    URNG rng,
+    URNG&& rng,
     Policy&& p);
 
 inline

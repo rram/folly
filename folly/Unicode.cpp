@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@ namespace folly {
 
 //////////////////////////////////////////////////////////////////////
 
-fbstring codePointToUtf8(char32_t cp) {
-  fbstring result;
+std::string codePointToUtf8(char32_t cp) {
+  std::string result;
 
   // Based on description from http://en.wikipedia.org/wiki/UTF-8.
 

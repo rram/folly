@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,7 +77,7 @@ HugePageSizeVec readRawHugePageSizes() {
   HugePageSizeVec vec;
   fs::path path("/sys/kernel/mm/hugepages");
   for (fs::directory_iterator it(path); it != fs::directory_iterator(); ++it) {
-    std::string filename(it->path().filename().native());
+    std::string filename(it->path().filename().string());
     if (boost::regex_match(filename, match, regex)) {
       StringPiece numStr(filename.data() + match.position(1), match.length(1));
       vec.emplace_back(to<size_t>(numStr) * 1024);
@@ -178,7 +178,7 @@ HugePageSizeVec readHugePageSizes() {
       // Store mount point
       fs::path path(parts[1].begin(), parts[1].end());
       struct stat st;
-      const int ret = stat(path.c_str(), &st);
+      const int ret = stat(path.string().c_str(), &st);
       if (ret == -1 && errno == ENOENT) {
         return;
       }

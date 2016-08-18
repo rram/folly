@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,8 +23,6 @@
 #include <folly/Random.h>
 #include <glog/logging.h>
 #include <gtest/gtest.h>
-
-DEFINE_int32(seed, 0, "Random seed");
 
 namespace folly { namespace futures { namespace test {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ namespace {
 // Guess the program name as basename(executable)
 std::string guessProgramName() {
   try {
-    return fs::executable_path().filename().native();
+    return fs::executable_path().filename().string();
   } catch (const std::exception&) {
     return "UNKNOWN";
   }
@@ -96,7 +96,7 @@ void NestedCommandLineApp::addAlias(std::string newName,
 }
 
 void NestedCommandLineApp::displayHelp(
-    const po::variables_map& globalOptions,
+    const po::variables_map& /* globalOptions */,
     const std::vector<std::string>& args) {
   if (args.empty()) {
     // General help
@@ -130,8 +130,8 @@ void NestedCommandLineApp::displayHelp(
     // Help for a given command
     auto& p = findCommand(args.front());
     if (p.first != args.front()) {
-      printf("`%1$s' is an alias for `%2$s'; showing help for `%2$s'\n",
-             args.front().c_str(), p.first.c_str());
+      printf("`%s' is an alias for `%s'; showing help for `%s'\n",
+             args.front().c_str(), p.first.c_str(), p.first.c_str());
     }
     auto& info = p.second;
 
@@ -181,7 +181,7 @@ auto NestedCommandLineApp::findCommand(const std::string& name) const
 
 int NestedCommandLineApp::run(int argc, const char* const argv[]) {
   if (programName_.empty()) {
-    programName_ = fs::path(argv[0]).filename().native();
+    programName_ = fs::path(argv[0]).filename().string();
   }
   return run(std::vector<std::string>(argv + 1, argv + argc));
 }

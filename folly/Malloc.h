@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
 // Functions to provide smarter use of jemalloc, if jemalloc is being used.
 // http://www.canonware.com/download/jemalloc/jemalloc-latest/doc/jemalloc.html
 
-#ifndef FOLLY_MALLOC_H_
+#pragma once
 #define FOLLY_MALLOC_H_
 
 /**
@@ -32,8 +32,9 @@
 #define MALLOCX_ZERO (static_cast<int>(0x40))
 #endif
 
-// If using fbstring from libstdc++, then just define stub code
-// here to typedef the fbstring type into the folly namespace.
+// If using fbstring from libstdc++ (see comment in FBString.h), then
+// just define stub code here to typedef the fbstring type into the
+// folly namespace.
 // This provides backwards compatibility for code that explicitly
 // includes and uses fbstring.
 #if defined(_GLIBCXX_USE_FB) && !defined(_LIBSTDCXX_FBSTRING)
@@ -58,7 +59,7 @@ namespace folly {
 #pragma GCC system_header
 
 /**
- * Declare *allocx() and mallctl() as weak symbols. These will be provided by
+ * Declare *allocx() and mallctl*() as weak symbols. These will be provided by
  * jemalloc if we are using jemalloc, or will be NULL if we are using another
  * malloc implementation.
  */
@@ -72,16 +73,22 @@ extern "C" size_t sallocx(const void*, int)
 __attribute__((__weak__));
 extern "C" void dallocx(void*, int)
 __attribute__((__weak__));
+extern "C" void sdallocx(void*, size_t, int)
+__attribute__((__weak__));
 extern "C" size_t nallocx(size_t, int)
 __attribute__((__weak__));
 extern "C" int mallctl(const char*, void*, size_t*, void*, size_t)
+__attribute__((__weak__));
+extern "C" int mallctlnametomib(const char*, size_t*, size_t*)
+__attribute__((__weak__));
+extern "C" int mallctlbymib(const size_t*, size_t, void*, size_t*, void*,
+                            size_t)
 __attribute__((__weak__));
 
 #include <bits/functexcept.h>
 #define FOLLY_HAVE_MALLOC_H 1
 #else
 #include <folly/detail/Malloc.h> /* nolint */
-#include <folly/Portability.h>
 #endif
 
 // for malloc_usable_size
@@ -95,6 +102,7 @@ __attribute__((__weak__));
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -107,47 +115,79 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 namespace folly {
 #endif
 
-bool usingJEMallocSlow();
+// Cannot depend on Portability.h when _LIBSTDCXX_FBSTRING.
+// Disabled for nvcc because it fails on attributes on lambdas.
+#if defined(__GNUC__) && !defined(__NVCC__)
+#define FOLLY_MALLOC_NOINLINE __attribute__((__noinline__))
+#else
+#define FOLLY_MALLOC_NOINLINE
+#endif
 
 /**
  * Determine if we are using jemalloc or not.
  */
-inline bool usingJEMalloc() {
+inline bool usingJEMalloc() noexcept {
   // Checking for rallocx != NULL is not sufficient; we may be in a dlopen()ed
   // module that depends on libjemalloc, so rallocx is resolved, but the main
-  // program might be using a different memory allocator. Look at the
-  // implementation of usingJEMallocSlow() for the (hacky) details.
-  static const bool result = usingJEMallocSlow();
+  // program might be using a different memory allocator.
+  // How do we determine that we're using jemalloc? In the hackiest
+  // way possible. We allocate memory using malloc() and see if the
+  // per-thread counter of allocated memory increases. This makes me
+  // feel dirty inside. Also note that this requires jemalloc to have
+  // been compiled with --enable-stats.
+  static const bool result = [] () FOLLY_MALLOC_NOINLINE noexcept {
+    // Some platforms (*cough* OSX *cough*) require weak symbol checks to be
+    // in the form if (mallctl != nullptr). Not if (mallctl) or if (!mallctl)
+    // (!!). http://goo.gl/xpmctm
+    if (mallocx == nullptr || rallocx == nullptr || xallocx == nullptr
+        || sallocx == nullptr || dallocx == nullptr || sdallocx == nullptr
+        || nallocx == nullptr || mallctl == nullptr
+        || mallctlnametomib == nullptr || mallctlbymib == nullptr) {
+      return false;
+    }
+
+    // "volatile" because gcc optimizes out the reads from *counter, because
+    // it "knows" malloc doesn't modify global state...
+    /* nolint */ volatile uint64_t* counter;
+    size_t counterLen = sizeof(uint64_t*);
+
+    if (mallctl("thread.allocatedp", static_cast<void*>(&counter), &counterLen,
+                nullptr, 0) != 0) {
+      return false;
+    }
+
+    if (counterLen != sizeof(uint64_t*)) {
+      return false;
+    }
+
+    uint64_t origAllocated = *counter;
+
+    // Static because otherwise clever compilers will find out that
+    // the ptr is not used and does not escape the scope, so they will
+    // just optimize away the malloc.
+    static void* ptr = malloc(1);
+    if (!ptr) {
+      // wtf, failing to allocate 1 byte
+      return false;
+    }
+
+    return (origAllocated != *counter);
+  }();
+
   return result;
 }
 
-/**
- * For jemalloc's size classes, see
- * http://www.canonware.com/download/jemalloc/jemalloc-latest/doc/jemalloc.html
- */
 inline size_t goodMallocSize(size_t minSize) noexcept {
+  if (minSize == 0) {
+    return 0;
+  }
+
   if (!usingJEMalloc()) {
     // Not using jemalloc - no smarts
     return minSize;
   }
-  size_t goodSize;
-  if (minSize <= 64) {
-    // Choose smallest allocation to be 64 bytes - no tripping over
-    // cache line boundaries, and small string optimization takes care
-    // of short strings anyway.
-    goodSize = 64;
-  } else if (minSize <= 512) {
-    // Round up to the next multiple of 64; we don't want to trip over
-    // cache line boundaries.
-    goodSize = (minSize + 63) & ~size_t(63);
-  } else {
-    // Boundaries between size classes depend on numerious factors, some of
-    // which can even be modified at run-time. Determine the good allocation
-    // size by calling nallocx() directly.
-    goodSize = nallocx(minSize, 0);
-  }
-  assert(nallocx(goodSize, 0) == goodSize);
-  return goodSize;
+
+  return nallocx(minSize, 0);
 }
 
 // We always request "good" sizes for allocation, so jemalloc can
@@ -239,5 +279,3 @@ _GLIBCXX_END_NAMESPACE_VERSION
 } // folly
 
 #endif // !defined(_GLIBCXX_USE_FB) || defined(_LIBSTDCXX_FBSTRING)
-
-#endif // FOLLY_MALLOC_H_

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,9 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_TIMESERIES_HISTOGRAM_H_
-#define FOLLY_TIMESERIES_HISTOGRAM_H_
+#pragma once
 
 #include <string>
-#include <boost/static_assert.hpp>
 #include <folly/stats/Histogram.h>
 #include <folly/stats/MultiLevelTimeSeries.h>
 
@@ -54,7 +52,7 @@ template <class T, class TT=std::chrono::seconds,
 class TimeseriesHistogram {
  private:
    // NOTE: T must be equivalent to _signed_ numeric type for our math.
-   BOOST_STATIC_ASSERT(std::numeric_limits<T>::is_signed);
+   static_assert(std::numeric_limits<T>::is_signed, "");
 
  public:
   // values to be inserted into container
@@ -97,9 +95,6 @@ class TimeseriesHistogram {
 
   /* Return the number of buckets */
   int getNumBuckets() const { return buckets_.getNumBuckets(); }
-
-  /* Return the bucket index into which the given value would fall. */
-  int getBucketIdx(const ValueType& value) const;
 
   /*
    * Return the threshold of the bucket for the given index in range
@@ -331,5 +326,3 @@ class TimeseriesHistogram {
 };
 
 }  // folly
-
-#endif  // FOLLY_TIMESERIES_HISTOGRAM_H_

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_STATS_MULTILEVELTIMESERIES_DEFS_H_
-#define FOLLY_STATS_MULTILEVELTIMESERIES_DEFS_H_
+#pragma once
 
+#include <folly/stats/MultiLevelTimeSeries.h>
 #include <glog/logging.h>
 
 namespace folly {
@@ -44,8 +44,31 @@ MultiLevelTimeSeries<VT, TT>::MultiLevelTimeSeries(
 }
 
 template <typename VT, typename TT>
-void MultiLevelTimeSeries<VT, TT>::addValue(TimeType now,
-                                            const ValueType& val) {
+MultiLevelTimeSeries<VT, TT>::MultiLevelTimeSeries(
+    size_t nBuckets,
+    std::initializer_list<TimeType> durations)
+    : cachedTime_(0), cachedSum_(0), cachedCount_(0) {
+  CHECK_GT(durations.size(), 0);
+
+  levels_.reserve(durations.size());
+  int i = 0;
+  TimeType prev;
+  for (auto dur : durations) {
+    if (dur == TT(0)) {
+      CHECK_EQ(i, durations.size() - 1);
+    } else if (i > 0) {
+      CHECK(prev < dur);
+    }
+    levels_.emplace_back(nBuckets, dur);
+    prev = dur;
+    i++;
+  }
+}
+
+template <typename VT, typename TT>
+void MultiLevelTimeSeries<VT, TT>::addValue(
+    TimeType now,
+    const ValueType& val) {
   addValueAggregated(now, val, 1);
 }
 
@@ -100,5 +123,3 @@ void MultiLevelTimeSeries<VT, TT>::clear() {
 }
 
 }  // folly
-
-#endif // FOLLY_STATS_MULTILEVELTIMESERIES_DEFS_H_

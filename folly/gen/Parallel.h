@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_GEN_PARALLEL_H_
+#pragma once
 #define FOLLY_GEN_PARALLEL_H_
 
 #include <mutex>
@@ -106,5 +106,3 @@ Sub sub(Sink sink) {
 }} // !namespace folly::gen
 
 #include <folly/gen/Parallel-inl.h>
-
-#endif /* FOLLY_GEN_PARALLEL_H_ */

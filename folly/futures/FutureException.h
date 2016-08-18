@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -48,8 +48,9 @@ public:
 
 class BrokenPromise : public FutureException {
   public:
-    explicit BrokenPromise() :
-      FutureException("Broken promise") { }
+    explicit BrokenPromise(std::string type) :
+      FutureException(
+          (std::string("Broken promise for type name `") + type) + '`') { }
 };
 
 class NoState : public FutureException {
@@ -73,12 +74,6 @@ class FutureAlreadyRetrieved : public FutureException {
   public:
     explicit FutureAlreadyRetrieved () :
       FutureException("Future already retrieved") { }
-};
-
-class UsingUninitializedTry : public FutureException {
-  public:
-    explicit UsingUninitializedTry() :
-      FutureException("Using unitialized try") { }
 };
 
 class FutureCancellation : public FutureException {

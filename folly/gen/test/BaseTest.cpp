@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -348,6 +348,11 @@ TEST(Gen, Take) {
       | take(5)
       | as<vector>();
     EXPECT_EQ(expected, actual);
+  }
+  {
+    int64_t limit = 5;
+    take(limit - 5);
+    EXPECT_THROW(take(limit - 6), std::invalid_argument);
   }
 }
 
@@ -993,7 +998,7 @@ TEST(Gen, CopyCount) {
 
 // test dynamics with various layers of nested arrays.
 TEST(Gen, Dynamic) {
-  dynamic array1 = {1, 2};
+  dynamic array1 = dynamic::array(1, 2);
   EXPECT_EQ(dynamic(3), from(array1) | sum);
   dynamic array2 = {{1}, {1, 2}};
   EXPECT_EQ(dynamic(4), from(array2) | rconcat | sum);
@@ -1226,17 +1231,17 @@ TEST(Gen, Unwrap) {
 
   auto oup = folly::make_optional(folly::make_unique<int>(5));
   // optional has a value, and that value is non-null
-  EXPECT_TRUE(oup | unwrap);
+  EXPECT_TRUE(bool(oup | unwrap));
   EXPECT_EQ(5, *(oup | unwrap));
   EXPECT_TRUE(oup.hasValue()); // still has a pointer (null or not)
-  EXPECT_TRUE(oup.value()); // that value isn't null
+  EXPECT_TRUE(bool(oup.value())); // that value isn't null
 
   auto moved1 = std::move(oup) | unwrapOr(folly::make_unique<int>(6));
   // oup still has a value, but now it's now nullptr since the pointer was moved
   // into moved1
   EXPECT_TRUE(oup.hasValue());
   EXPECT_FALSE(oup.value());
-  EXPECT_TRUE(moved1);
+  EXPECT_TRUE(bool(moved1));
   EXPECT_EQ(5, *moved1);
 
   auto moved2 = std::move(oup) | unwrapOr(folly::make_unique<int>(7));
@@ -1246,7 +1251,7 @@ TEST(Gen, Unwrap) {
   oup.clear();
   auto moved3 = std::move(oup) | unwrapOr(folly::make_unique<int>(8));
   // oup is empty now, so the unwrapOr comes into play.
-  EXPECT_TRUE(moved3);
+  EXPECT_TRUE(bool(moved3));
   EXPECT_EQ(8, *moved3);
 
   {
@@ -1285,14 +1290,14 @@ TEST(Gen, Unwrap) {
     auto fallback = unwrapOr(folly::make_unique<int>(9));
     // fallback must be std::move'd to be used
     EXPECT_EQ(8, *(opt | std::move(fallback)));
-    EXPECT_TRUE(opt.value()); // shared_ptr copied out, not moved
-    EXPECT_TRUE(opt); // value still present
-    EXPECT_TRUE(fallback.value()); // fallback value not needed
+    EXPECT_TRUE(bool(opt.value())); // shared_ptr copied out, not moved
+    EXPECT_TRUE(bool(opt)); // value still present
+    EXPECT_TRUE(bool(fallback.value())); // fallback value not needed
 
     EXPECT_EQ(8, *(std::move(opt) | std::move(fallback)));
     EXPECT_FALSE(opt.value()); // shared_ptr moved out
-    EXPECT_TRUE(opt); // gutted value still present
-    EXPECT_TRUE(fallback.value()); // fallback value not needed
+    EXPECT_TRUE(bool(opt)); // gutted value still present
+    EXPECT_TRUE(bool(fallback.value())); // fallback value not needed
 
     opt.clear();
 

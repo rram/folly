@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -74,6 +74,19 @@ TEST(AsyncSocketTest, v4v6samePort) {
   for (const auto& addr : addrs) {
     EXPECT_EQ(port, addr.getPort());
   }
+}
+
+TEST(AsyncSocketTest, duplicateBind) {
+  EventBase base;
+  auto server1 = AsyncServerSocket::newSocket(&base);
+  server1->bind(0);
+  server1->listen(10);
+
+  SocketAddress address;
+  server1->getAddress(std::addressof(address));
+
+  auto server2 = AsyncServerSocket::newSocket(&base);
+  EXPECT_THROW(server2->bind(address.getPort()), std::exception);
 }
 
 } // namespace

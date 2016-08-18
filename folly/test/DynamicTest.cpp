@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include <folly/dynamic.h>
 
 #include <boost/next_prior.hpp>
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 using folly::dynamic;
@@ -51,7 +50,7 @@ TEST(Dynamic, ObjectBasics) {
 
   EXPECT_EQ(*newObject.keys().begin(), newObject.items().begin()->first);
   EXPECT_EQ(*newObject.values().begin(), newObject.items().begin()->second);
-  std::vector<std::pair<folly::fbstring, dynamic>> found;
+  std::vector<std::pair<std::string, dynamic>> found;
   found.emplace_back(newObject.keys().begin()->asString(),
                      *newObject.values().begin());
 
@@ -77,7 +76,7 @@ TEST(Dynamic, ObjectBasics) {
   EXPECT_TRUE(d3 == nullptr);
   d3 = dynamic::object;
   EXPECT_TRUE(d3.isObject());
-  d3["foo"] = { 1, 2, 3 };
+  d3["foo"] = dynamic::array(1, 2, 3);
   EXPECT_EQ(d3.count("foo"), 1);
 
   d3[123] = 321;
@@ -98,6 +97,40 @@ TEST(Dynamic, ObjectBasics) {
 
   // We don't allow objects as keys in objects.
   EXPECT_ANY_THROW(newObject[d3] = 12);
+
+  // Merge two objects
+  dynamic origMergeObj1 = folly::dynamic::object();
+  dynamic mergeObj1 = origMergeObj1 = folly::dynamic::object
+    ("key1", "value1")
+    ("key2", "value2");
+  dynamic mergeObj2 = folly::dynamic::object
+    ("key2", "value3")
+    ("key3", "value4");
+
+  // Merged object where we prefer the values in mergeObj2
+  dynamic combinedPreferObj2 = folly::dynamic::object
+    ("key1", "value1")
+    ("key2", "value3")
+    ("key3", "value4");
+
+  // Merged object where we prefer the values in mergeObj1
+  dynamic combinedPreferObj1 = folly::dynamic::object
+    ("key1", "value1")
+    ("key2", "value2")
+    ("key3", "value4");
+
+  auto newMergeObj = dynamic::merge(mergeObj1, mergeObj2);
+  EXPECT_EQ(newMergeObj, combinedPreferObj2);
+  EXPECT_EQ(mergeObj1, origMergeObj1); // mergeObj1 should be unchanged
+
+  mergeObj1.update(mergeObj2);
+  EXPECT_EQ(mergeObj1, combinedPreferObj2);
+  dynamic arr = dynamic::array(1, 2, 3, 4, 5, 6);
+  EXPECT_THROW(mergeObj1.update(arr), std::exception);
+
+  mergeObj1 = origMergeObj1; // reset it
+  mergeObj1.update_missing(mergeObj2);
+  EXPECT_EQ(mergeObj1, combinedPreferObj1);
 }
 
 TEST(Dynamic, ObjectErase) {
@@ -128,7 +161,7 @@ TEST(Dynamic, ObjectErase) {
 }
 
 TEST(Dynamic, ArrayErase) {
-  dynamic arr = { 1, 2, 3, 4, 5, 6 };
+  dynamic arr = dynamic::array(1, 2, 3, 4, 5, 6);
 
   EXPECT_THROW(arr.erase(1), std::exception);
   EXPECT_EQ(arr.size(), 6);
@@ -151,7 +184,7 @@ TEST(Dynamic, StringBasics) {
 }
 
 TEST(Dynamic, ArrayBasics) {
-  dynamic array = { 1, 2, 3 };
+  dynamic array = dynamic::array(1, 2, 3);
   EXPECT_EQ(array.size(), 3);
   EXPECT_EQ(array.at(0), 1);
   EXPECT_EQ(array.at(1), 2);
@@ -169,7 +202,7 @@ TEST(Dynamic, ArrayBasics) {
 }
 
 TEST(Dynamic, DeepCopy) {
-  dynamic val = { "foo", "bar", { "foo1", "bar1" } };
+  dynamic val = dynamic::array("foo", "bar", dynamic::array("foo1", "bar1"));
   EXPECT_EQ(val.at(2).at(0), "foo1");
   EXPECT_EQ(val.at(2).at(1), "bar1");
   dynamic val2 = val;
@@ -184,15 +217,24 @@ TEST(Dynamic, DeepCopy) {
   EXPECT_EQ(val2.at(2).at(0), "foo3");
   EXPECT_EQ(val2.at(2).at(1), "bar3");
 
-  dynamic obj = dynamic::object("a", "b")
-                               ("c", {"d", "e", "f"})
-                               ;
+  dynamic obj =
+    dynamic::object("a", "b")
+                   ("c", dynamic::array("d", "e", "f"));
   EXPECT_EQ(obj.at("a"), "b");
   dynamic obj2 = obj;
-  obj2.at("a") = {1, 2, 3};
+  obj2.at("a") = dynamic::array(1, 2, 3);
   EXPECT_EQ(obj.at("a"), "b");
-  dynamic expected = {1, 2, 3};
+  dynamic expected = dynamic::array(1, 2, 3);
   EXPECT_EQ(obj2.at("a"), expected);
+}
+
+TEST(Dynamic, ArrayReassignment) {
+  dynamic o = 1;
+  dynamic d1 = dynamic::array(o);
+  EXPECT_EQ(dynamic::ARRAY, d1.type());
+
+  d1 = dynamic::array(o);
+  EXPECT_EQ(dynamic::ARRAY, d1.type());
 }
 
 TEST(Dynamic, Operator) {
@@ -201,6 +243,9 @@ TEST(Dynamic, Operator) {
     dynamic d1 = dynamic::object;
     dynamic d2 = dynamic::object;
     auto foo = d1 < d2;
+    LOG(ERROR) << "operator < returned "
+               << static_cast<int>(foo)
+               << " instead of throwing";
   } catch (std::exception const& e) {
     caught = true;
   }
@@ -244,7 +289,7 @@ TEST(Dynamic, GetSetDefaultTest) {
 
   dynamic d2 = dynamic::object("foo", "bar");
   EXPECT_EQ(d2.setDefault("foo", "quux"), "bar");
-  d2.setDefault("bar", dynamic({})).push_back(42);
+  d2.setDefault("bar", dynamic::array).push_back(42);
   EXPECT_EQ(d2["bar"][0], 42);
 
   dynamic d3 = dynamic::object, empty = dynamic::object;
@@ -253,7 +298,7 @@ TEST(Dynamic, GetSetDefaultTest) {
   EXPECT_EQ(d3["foo"]["bar"], "baz");
 
   // we do not allow getDefault/setDefault on arrays
-  dynamic d4 = dynamic({});
+  dynamic d4 = dynamic::array;
   EXPECT_ANY_THROW(d4.getDefault("foo", "bar"));
   EXPECT_ANY_THROW(d4.setDefault("foo", "bar"));
 }
@@ -261,13 +306,13 @@ TEST(Dynamic, GetSetDefaultTest) {
 TEST(Dynamic, ObjectForwarding) {
   // Make sure dynamic::object can be constructed the same way as any
   // dynamic.
-  dynamic d = dynamic::object("asd", {"foo", "bar"});
-  dynamic d2 = dynamic::object("key2", {"value", "words"})
+  dynamic d = dynamic::object("asd", dynamic::array("foo", "bar"));
+  dynamic d2 = dynamic::object("key2", dynamic::array("value", "words"))
                               ("key", "value1");
 }
 
 TEST(Dynamic, GetPtr) {
-  dynamic array = { 1, 2, "three" };
+  dynamic array = dynamic::array(1, 2, "three");
   EXPECT_TRUE(array.get_ptr(0));
   EXPECT_FALSE(array.get_ptr(-1));
   EXPECT_FALSE(array.get_ptr(3));
@@ -286,13 +331,13 @@ TEST(Dynamic, GetPtr) {
 }
 
 TEST(Dynamic, Assignment) {
-  const dynamic ds[] = { { 1, 2, 3 },
+  const dynamic ds[] = { dynamic::array(1, 2, 3),
                          dynamic::object("a", true),
                          24,
                          26.5,
                          true,
                          "hello", };
-  const dynamic dd[] = { { 5, 6 },
+  const dynamic dd[] = { dynamic::array(5, 6),
                          dynamic::object("t", "T")(1, 7),
                          9000,
                          3.14159,
@@ -308,8 +353,8 @@ TEST(Dynamic, Assignment) {
   }
 }
 
-folly::fbstring make_long_string() {
-  return folly::fbstring(100, 'a');
+std::string make_long_string() {
+  return std::string(100, 'a');
 }
 
 TEST(Dynamic, GetDefault) {
@@ -426,8 +471,8 @@ TEST(Dynamic, Brackets) {
   EXPECT_NE(ds, md["key1"]);
 }
 
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
+TEST(Dynamic, PrintNull) {
+  std::stringstream ss;
+  ss << folly::dynamic(nullptr);
+  EXPECT_EQ("null", ss.str());
 }

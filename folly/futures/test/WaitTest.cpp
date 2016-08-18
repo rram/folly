@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <queue>
 
 #include <gtest/gtest.h>
 
@@ -194,4 +196,17 @@ TEST(Wait, waitWithDuration) {
    EXPECT_TRUE(f.isReady());
    t.join();
  }
+}
+
+TEST(Wait, multipleWait) {
+  auto f = futures::sleep(milliseconds(100));
+  for (size_t i = 0; i < 5; ++i) {
+    EXPECT_FALSE(f.isReady());
+    f.wait(milliseconds(3));
+  }
+  EXPECT_FALSE(f.isReady());
+  f.wait();
+  EXPECT_TRUE(f.isReady());
+  f.wait();
+  EXPECT_TRUE(f.isReady());
 }

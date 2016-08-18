@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_BASE_FOREACH_H_
-#define FOLLY_BASE_FOREACH_H_
+#pragma once
 
 /*
  * Iterim macros (until we have C++0x range-based for) that simplify
@@ -227,5 +226,3 @@ downTo(T& iter, const U& begin) {
  */
 #define FOR_EACH_RANGE_R(i, begin, end) \
   for (auto i = (false ? (begin) : (end)); ::folly::detail::downTo(i, (begin));)
-
-#endif

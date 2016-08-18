@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,6 @@
 #include <folly/io/RecordIO.h>
 
 #include <sys/types.h>
-#include <unistd.h>
 
 #include <folly/Exception.h>
 #include <folly/FileUtil.h>
@@ -25,6 +24,7 @@
 #include <folly/Portability.h>
 #include <folly/ScopeGuard.h>
 #include <folly/String.h>
+#include <folly/portability/Unistd.h>
 
 namespace folly {
 
@@ -174,7 +174,7 @@ size_t prependHeader(std::unique_ptr<IOBuf>& buf, uint32_t fileId) {
 
 RecordInfo validateRecord(ByteRange range, uint32_t fileId) {
   if (range.size() <= headerSize()) {  // records may not be empty
-    return {0};
+    return {0, {}};
   }
   const Header* header = reinterpret_cast<const Header*>(range.begin());
   range.advance(sizeof(Header));
@@ -184,14 +184,14 @@ RecordInfo validateRecord(ByteRange range, uint32_t fileId) {
       header->flags != 0 ||
       (fileId != 0 && header->fileId != fileId) ||
       header->dataLength > range.size()) {
-    return {0};
+    return {0, {}};
   }
   if (headerHash(*header) != header->headerHash) {
-    return {0};
+    return {0, {}};
   }
   range.reset(range.begin(), header->dataLength);
   if (dataHash(range) != header->dataHash) {
-    return {0};
+    return {0, {}};
   }
   return {header->fileId, range};
 }
@@ -226,7 +226,7 @@ RecordInfo findRecord(ByteRange searchRange,
     start += sizeof(magic);
   }
 
-  return {0};
+  return {0, {}};
 }
 
 }  // namespace

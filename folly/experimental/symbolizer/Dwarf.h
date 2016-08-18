@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,7 @@
 
 // DWARF record parser
 
-#ifndef FOLLY_EXPERIMENTAL_SYMBOLIZER_DWARF_H_
-#define FOLLY_EXPERIMENTAL_SYMBOLIZER_DWARF_H_
+#pragma once
 
 #include <boost/variant.hpp>
 
@@ -117,6 +116,12 @@ class Dwarf {
 
  private:
   void init();
+  static bool findDebugInfoOffset(uintptr_t address,
+                                  StringPiece aranges,
+                                  uint64_t& offset);
+  bool findLocation(uintptr_t address,
+                    StringPiece& infoEntry,
+                    LocationInfo& info) const;
 
   const ElfFile* elf_;
 
@@ -270,5 +275,3 @@ inline std::ostream& operator<<(std::ostream& out, const Dwarf::Path& path) {
 
 }  // namespace symbolizer
 }  // namespace folly
-
-#endif /* FOLLY_EXPERIMENTAL_SYMBOLIZER_DWARF_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -436,9 +436,7 @@ TEST(NotificationQueueTest, ConsumeUntilDrained) {
 
   // Make sure there can only be one drainer at once
   folly::Baton<> callbackBaton, threadStartBaton;
-  consumer.fn = [&](int i) {
-    callbackBaton.wait();
-  };
+  consumer.fn = [&](int /* i */) { callbackBaton.wait(); };
   QueueConsumer competingConsumer;
   competingConsumer.startConsuming(&eventBase, &queue);
   queue.putMessage(1);
@@ -487,9 +485,7 @@ TEST(NotificationQueueTest, ConsumeUntilDrainedStress) {
 
     // Make sure there can only be one drainer at once
     folly::Baton<> callbackBaton, threadStartBaton;
-    consumer.fn = [&](int i) {
-      callbackBaton.wait();
-    };
+    consumer.fn = [&](int /* i */) { callbackBaton.wait(); };
     QueueConsumer competingConsumer;
     competingConsumer.startConsuming(&eventBase, &queue);
     queue.putMessage(1);
@@ -643,4 +639,22 @@ TEST(NotificationQueueTest, UseAfterFork) {
   consumer.messages.pop_front();
   EXPECT_EQ(5678, consumer.messages.front());
   consumer.messages.pop_front();
+}
+
+TEST(NotificationQueueConsumer, make) {
+  int value = 0;
+  EventBase evb;
+  NotificationQueue<int> queue(32);
+
+  auto consumer = decltype(queue)::Consumer::make([&](
+      int&& msg) noexcept { value = msg; });
+
+  consumer->startConsuming(&evb, &queue);
+
+  int const newValue = 10;
+  queue.tryPutMessage(newValue);
+
+  evb.loopOnce();
+
+  EXPECT_EQ(newValue, value);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +14,19 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_BENCHMARK_H_
-#define FOLLY_BENCHMARK_H_
+#pragma once
 
-#include <folly/ScopeGuard.h>
 #include <folly/Portability.h>
 #include <folly/Preprocessor.h> // for FB_ANONYMOUS_VARIABLE
+#include <folly/ScopeGuard.h>
+#include <folly/portability/GFlags.h>
+#include <folly/portability/Time.h>
+
 #include <cassert>
 #include <ctime>
 #include <boost/function_types/function_arity.hpp>
 #include <functional>
 #include <glog/logging.h>
-#include <gflags/gflags.h>
 #include <limits>
 #include <type_traits>
 
@@ -257,11 +258,18 @@ void doNotOptimizeAway(T&& datum) {
 
 #pragma optimize("", on)
 
+#elif defined(__clang__)
+
+template <class T>
+__attribute__((__optnone__)) void doNotOptimizeAway(T&& /* datum */) {}
+
 #else
+
 template <class T>
 void doNotOptimizeAway(T&& datum) {
   asm volatile("" : "+r" (datum));
 }
+
 #endif
 
 } // namespace folly
@@ -367,7 +375,7 @@ void doNotOptimizeAway(T&& datum) {
   BENCHMARK_NAMED_PARAM(name, param, param)
 
 /**
- * Same as BENCHMARK_PARAM, but allows to return the actual number of
+ * Same as BENCHMARK_PARAM, but allows one to return the actual number of
  * iterations that have been run.
  */
 #define BENCHMARK_PARAM_MULTI(name, param)                              \
@@ -407,7 +415,7 @@ void doNotOptimizeAway(T&& datum) {
   }
 
 /**
- * Same as BENCHMARK_NAMED_PARAM, but allows to return the actual number
+ * Same as BENCHMARK_NAMED_PARAM, but allows one to return the actual number
  * of iterations that have been run.
  */
 #define BENCHMARK_NAMED_PARAM_MULTI(name, param_name, ...)              \
@@ -452,7 +460,7 @@ void doNotOptimizeAway(T&& datum) {
     __VA_ARGS__)
 
 /**
- * Same as BENCHMARK_RELATIVE, but allows to return the actual number
+ * Same as BENCHMARK_RELATIVE, but allows one to return the actual number
  * of iterations that have been run.
  */
 #define BENCHMARK_RELATIVE_MULTI(name, ...)                     \
@@ -469,7 +477,7 @@ void doNotOptimizeAway(T&& datum) {
   BENCHMARK_RELATIVE_NAMED_PARAM(name, param, param)
 
 /**
- * Same as BENCHMARK_RELATIVE_PARAM, but allows to return the actual
+ * Same as BENCHMARK_RELATIVE_PARAM, but allows one to return the actual
  * number of iterations that have been run.
  */
 #define BENCHMARK_RELATIVE_PARAM_MULTI(name, param)                     \
@@ -489,7 +497,7 @@ void doNotOptimizeAway(T&& datum) {
   }
 
 /**
- * Same as BENCHMARK_RELATIVE_NAMED_PARAM, but allows to return the
+ * Same as BENCHMARK_RELATIVE_NAMED_PARAM, but allows one to return the
  * actual number of iterations that have been run.
  */
 #define BENCHMARK_RELATIVE_NAMED_PARAM_MULTI(name, param_name, ...)     \
@@ -527,5 +535,3 @@ void doNotOptimizeAway(T&& datum) {
   if (auto FB_ANONYMOUS_VARIABLE(BENCHMARK_SUSPEND) =   \
       ::folly::BenchmarkSuspender()) {}                 \
   else
-
-#endif // FOLLY_BENCHMARK_H_

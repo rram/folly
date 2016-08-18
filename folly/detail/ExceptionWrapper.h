@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_DETAIL_EXCEPTIONWRAPPER_H
-#define FOLLY_DETAIL_EXCEPTIONWRAPPER_H
+#pragma once
 
 namespace folly { namespace detail {
 
@@ -28,5 +27,3 @@ class Thrower {
 };
 
 }}
-
-#endif

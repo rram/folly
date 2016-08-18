@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_ATOMIC_STRUCT_H_
-#define FOLLY_ATOMIC_STRUCT_H_
+#pragma once
 
 #include <atomic>
 #include <type_traits>
@@ -44,7 +43,10 @@ class AtomicStruct {
                 folly::IsTriviallyCopyable<T>::value,
       "target type must be trivially copyable");
 
-  Atom<Raw> data;
+  union {
+    Atom<Raw> data;
+    T typedData;
+  };
 
   static Raw encode(T v) noexcept {
     // we expect the compiler to optimize away the memcpy, but without
@@ -66,7 +68,7 @@ class AtomicStruct {
   AtomicStruct(AtomicStruct<T> const &) = delete;
   AtomicStruct<T>& operator= (AtomicStruct<T> const &) = delete;
 
-  constexpr /* implicit */ AtomicStruct(T v) noexcept : data(encode(v)) {}
+  constexpr /* implicit */ AtomicStruct(T v) noexcept : typedData(v) {}
 
   bool is_lock_free() const noexcept {
     return data.is_lock_free();
@@ -135,5 +137,3 @@ template <> struct AtomicStructIntPick<8> { typedef uint64_t type; };
 } // namespace detail
 
 } // namespace folly
-
-#endif

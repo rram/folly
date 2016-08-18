@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,14 +16,14 @@
 
 #include <folly/File.h>
 
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/file.h>
 
 #include <folly/Exception.h>
 #include <folly/FileUtil.h>
 #include <folly/Format.h>
 #include <folly/ScopeGuard.h>
+#include <folly/portability/Fcntl.h>
+#include <folly/portability/SysFile.h>
+#include <folly/portability/Unistd.h>
 
 #include <system_error>
 

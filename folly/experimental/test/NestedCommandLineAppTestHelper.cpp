@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
  */
 
 #include <folly/experimental/NestedCommandLineApp.h>
-#include <gflags/gflags.h>
+#include <folly/portability/GFlags.h>
 
 DEFINE_int32(global_foo, 42, "Global foo");
 
@@ -24,8 +24,8 @@ namespace po = ::boost::program_options;
 namespace {
 
 void init(const std::string& cmd,
-          const po::variables_map& options,
-          const std::vector<std::string>& args) {
+          const po::variables_map& /* options */,
+          const std::vector<std::string>& /* args */) {
   printf("running %s\n", cmd.c_str());
 }
 

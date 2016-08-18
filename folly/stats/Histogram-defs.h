@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_HISTOGRAM_DEFS_H_
-#define FOLLY_HISTOGRAM_DEFS_H_
+#pragma once
 
 #include <folly/Conv.h>
 
@@ -63,7 +62,7 @@ unsigned int HistogramBuckets<T, BucketType>::getBucketIdx(
 
 template <typename T, typename BucketType>
 template <typename CountFn>
-const uint64_t HistogramBuckets<T, BucketType>::computeTotalCount(
+uint64_t HistogramBuckets<T, BucketType>::computeTotalCount(
     CountFn countFromBucket) const {
   uint64_t count = 0;
   for (unsigned int n = 0; n < buckets_.size(); ++n) {
@@ -278,5 +277,3 @@ void Histogram<T>::toTSV(std::ostream& out, bool skipEmptyBuckets) const {
 }
 
 } // folly
-
-#endif // FOLLY_HISTOGRAM_DEFS_H_

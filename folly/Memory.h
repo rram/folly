@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_MEMORY_H_
-#define FOLLY_MEMORY_H_
+#pragma once
 
 #include <folly/Traits.h>
+#include <folly/portability/Memory.h>
 
 #include <cstddef>
 #include <cstdlib>
@@ -37,31 +37,51 @@ namespace folly {
  * @author Xu Ning (xning@fb.com)
  */
 
-template<typename T, typename Dp = std::default_delete<T>, typename... Args>
-typename std::enable_if<!std::is_array<T>::value, std::unique_ptr<T, Dp>>::type
+#if __cplusplus >= 201402L ||                                              \
+    (defined __cpp_lib_make_unique && __cpp_lib_make_unique >= 201304L) || \
+    (defined(_MSC_VER) && _MSC_VER >= 1900)
+
+/* using override */ using std::make_unique;
+
+#else
+
+template<typename T, typename... Args>
+typename std::enable_if<!std::is_array<T>::value, std::unique_ptr<T>>::type
 make_unique(Args&&... args) {
-  return std::unique_ptr<T, Dp>(new T(std::forward<Args>(args)...));
+  return std::unique_ptr<T>(new T(std::forward<Args>(args)...));
 }
 
 // Allows 'make_unique<T[]>(10)'. (N3690 s20.9.1.4 p3-4)
-template<typename T, typename Dp = std::default_delete<T>>
-typename std::enable_if<std::is_array<T>::value, std::unique_ptr<T, Dp>>::type
+template<typename T>
+typename std::enable_if<std::is_array<T>::value, std::unique_ptr<T>>::type
 make_unique(const size_t n) {
-  return std::unique_ptr<T, Dp>(new typename std::remove_extent<T>::type[n]());
+  return std::unique_ptr<T>(new typename std::remove_extent<T>::type[n]());
 }
 
 // Disallows 'make_unique<T[10]>()'. (N3690 s20.9.1.4 p5)
-template<typename T, typename Dp = std::default_delete<T>, typename... Args>
+template<typename T, typename... Args>
 typename std::enable_if<
-  std::extent<T>::value != 0, std::unique_ptr<T, Dp>>::type
+  std::extent<T>::value != 0, std::unique_ptr<T>>::type
 make_unique(Args&&...) = delete;
+
+#endif
 
 /**
  * static_function_deleter
  *
  * So you can write this:
  *
- *      using BIO_deleter = folly::static_function_deleter<BIO, &BIO_free>;
+ *      using RSA_deleter = folly::static_function_deleter<RSA, &RSA_free>;
+ *      auto rsa = std::unique_ptr<RSA, RSA_deleter>(RSA_new());
+ *      RSA_generate_key_ex(rsa.get(), bits, exponent, nullptr);
+ *      rsa = nullptr;  // calls RSA_free(rsa.get())
+ *
+ * This would be sweet as well for BIO, but unfortunately BIO_free has signature
+ * int(BIO*) while we require signature void(BIO*). So you would need to make a
+ * wrapper for it:
+ *
+ *      inline void BIO_free_fb(BIO* bio) { CHECK_EQ(1, BIO_free(bio)); }
+ *      using BIO_deleter = folly::static_function_deleter<BIO, &BIO_free_fb>;
  *      auto buf = std::unique_ptr<BIO, BIO_deleter>(BIO_new(BIO_s_mem()));
  *      buf = nullptr;  // calls BIO_free(buf.get())
  */
@@ -89,9 +109,15 @@ struct static_function_deleter {
  *
  *      using T = foobar::cpp2::FooBarServiceAsyncClient;
  */
-template <typename T>
-std::shared_ptr<T> to_shared_ptr(std::unique_ptr<T>&& ptr) {
+template <typename T, typename D>
+std::shared_ptr<T> to_shared_ptr(std::unique_ptr<T, D>&& ptr) {
   return std::shared_ptr<T>(std::move(ptr));
+}
+
+using SysBufferDeleter = static_function_deleter<void, ::free>;
+using SysBufferUniquePtr = std::unique_ptr<void, SysBufferDeleter>;
+inline SysBufferUniquePtr allocate_sys_buffer(size_t size) {
+  return SysBufferUniquePtr(::malloc(size));
 }
 
 /**
@@ -183,13 +209,11 @@ class StlAllocator {
   template <class U> StlAllocator(const StlAllocator<Alloc, U>& other)
     : alloc_(other.alloc()) { }
 
-  T* allocate(size_t n, const void* hint = nullptr) {
+  T* allocate(size_t n, const void* /* hint */ = nullptr) {
     return static_cast<T*>(alloc_->allocate(n * sizeof(T)));
   }
 
-  void deallocate(T* p, size_t n) {
-    alloc_->deallocate(p);
-  }
+  void deallocate(T* p, size_t /* n */) { alloc_->deallocate(p); }
 
   size_t max_size() const {
     return std::numeric_limits<size_t>::max();
@@ -400,5 +424,3 @@ std::shared_ptr<T> allocate_shared(Allocator&& allocator, Args&&... args) {
 template <class T> struct IsArenaAllocator : std::false_type { };
 
 }  // namespace folly
-
-#endif /* FOLLY_MEMORY_H_ */

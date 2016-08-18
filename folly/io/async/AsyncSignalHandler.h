@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -83,7 +83,7 @@ class AsyncSignalHandler {
   AsyncSignalHandler(AsyncSignalHandler const &);
   AsyncSignalHandler& operator=(AsyncSignalHandler const &);
 
-  static void libeventCallback(int signum, short events, void* arg);
+  static void libeventCallback(libevent_fd_t signum, short events, void* arg);
 
   EventBase* eventBase_;
   SignalEventMap signalEvents_;

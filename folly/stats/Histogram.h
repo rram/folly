@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_HISTOGRAM_H_
-#define FOLLY_HISTOGRAM_H_
+#pragma once
 
 #include <cstddef>
 #include <limits>
@@ -24,6 +23,7 @@
 #include <vector>
 #include <stdexcept>
 
+#include <folly/CPortability.h>
 #include <folly/detail/Stats.h>
 
 namespace folly {
@@ -152,7 +152,7 @@ class HistogramBuckets {
    * @return Returns the total number of values stored across all buckets
    */
   template <typename CountFn>
-  const uint64_t computeTotalCount(CountFn countFromBucket) const;
+  uint64_t computeTotalCount(CountFn countFromBucket) const;
 
   /**
    * Determine which bucket the specified percentile falls into.
@@ -243,17 +243,24 @@ class Histogram {
     : buckets_(bucketSize, min, max, Bucket()) {}
 
   /* Add a data point to the histogram */
-  void addValue(ValueType value) {
+  void addValue(ValueType value) UBSAN_DISABLE("signed-integer-overflow")
+      UBSAN_DISABLE("unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
-    // TODO: It would be nice to handle overflow here.
+    // NOTE: Overflow is handled elsewhere and tests check this
+    // behavior (see HistogramTest.cpp TestOverflow* tests).
+    // TODO: It would be nice to handle overflow here and redesign this class.
     bucket.sum += value;
     bucket.count += 1;
   }
 
   /* Add multiple same data points to the histogram */
-  void addRepeatedValue(ValueType value, uint64_t nSamples) {
+  void addRepeatedValue(ValueType value, uint64_t nSamples)
+      UBSAN_DISABLE("signed-integer-overflow")
+          UBSAN_DISABLE("unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
-    // TODO: It would be nice to handle overflow here.
+    // NOTE: Overflow is handled elsewhere and tests check this
+    // behavior (see HistogramTest.cpp TestOverflow* tests).
+    // TODO: It would be nice to handle overflow here and redesign this class.
     bucket.sum += value * nSamples;
     bucket.count += nSamples;
   }
@@ -265,9 +272,12 @@ class Histogram {
    * had previously been added to the histogram; it merely subtracts the
    * requested value from the appropriate bucket's sum.
    */
-  void removeValue(ValueType value) {
+  void removeValue(ValueType value) UBSAN_DISABLE("signed-integer-overflow")
+      UBSAN_DISABLE("unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
-    // TODO: It would be nice to handle overflow here.
+    // NOTE: Overflow is handled elsewhere and tests check this
+    // behavior (see HistogramTest.cpp TestOverflow* tests).
+    // TODO: It would be nice to handle overflow here and redesign this class.
     if (bucket.count > 0) {
       bucket.sum -= value;
       bucket.count -= 1;
@@ -393,7 +403,7 @@ class Histogram {
    *
    * Runs in O(numBuckets)
    */
-  const uint64_t computeTotalCount() const {
+  uint64_t computeTotalCount() const {
     CountFromBucket countFn;
     return buckets_.computeTotalCount(countFn);
   }
@@ -466,5 +476,3 @@ class Histogram {
 };
 
 } // folly
-
-#endif // FOLLY_HISTOGRAM_H_

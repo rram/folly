@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,13 +19,10 @@
 #include <sys/stat.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <unistd.h>
 
 #include <iostream>
 #include <stdexcept>
 #include <system_error>
-
-#include <gflags/gflags.h>
 
 #include <folly/File.h>
 #include <folly/Format.h>
@@ -34,6 +31,8 @@
 #include <folly/Range.h>
 #include <folly/ScopeGuard.h>
 #include <folly/experimental/io/HugePages.h>
+#include <folly/portability/GFlags.h>
+#include <folly/portability/Unistd.h>
 
 DEFINE_bool(cp, false, "Copy file");
 
@@ -41,9 +40,7 @@ using namespace folly;
 
 namespace {
 
-FOLLY_NORETURN void usage(const char* name);
-
-void usage(const char* name) {
+[[noreturn]] void usage(const char* name) {
   std::cerr << folly::format(
       "Usage: {0}\n"
       "         list all huge page sizes and their mount points\n"

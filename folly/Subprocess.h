@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -90,8 +90,8 @@
  * make sure to serialize your signals (i.e. kill()) with the waits --
  * either wait & signal from the same thread, or use a mutex.
  */
-#ifndef FOLLY_SUBPROCESS_H_
-#define FOLLY_SUBPROCESS_H_
+
+#pragma once
 
 #include <sys/types.h>
 #include <signal.h>
@@ -108,8 +108,10 @@
 #include <boost/container/flat_map.hpp>
 #include <boost/operators.hpp>
 
+#include <folly/Exception.h>
 #include <folly/File.h>
 #include <folly/FileUtil.h>
+#include <folly/Function.h>
 #include <folly/gen/String.h>
 #include <folly/io/IOBufQueue.h>
 #include <folly/MapUtil.h>
@@ -215,7 +217,7 @@ class CalledProcessError : public SubprocessError {
  public:
   explicit CalledProcessError(ProcessReturnCode rc);
   ~CalledProcessError() throw() = default;
-  const char* what() const throw() FOLLY_OVERRIDE { return what_.c_str(); }
+  const char* what() const throw() override { return what_.c_str(); }
   ProcessReturnCode returnCode() const { return returnCode_; }
  private:
   ProcessReturnCode returnCode_;
@@ -229,7 +231,7 @@ class SubprocessSpawnError : public SubprocessError {
  public:
   SubprocessSpawnError(const char* executable, int errCode, int errnoValue);
   ~SubprocessSpawnError() throw() = default;
-  const char* what() const throw() FOLLY_OVERRIDE { return what_.c_str(); }
+  const char* what() const throw() override { return what_.c_str(); }
   int errnoValue() const { return errnoValue_; }
 
  private:
@@ -246,6 +248,23 @@ class Subprocess {
   static const int PIPE = -2;
   static const int PIPE_IN = -3;
   static const int PIPE_OUT = -4;
+
+  /**
+   * See Subprocess::Options::dangerousPostForkPreExecCallback() for usage.
+   * Every derived class should include the following warning:
+   *
+   * DANGER: This class runs after fork in a child processes. Be fast, the
+   * parent thread is waiting, but remember that other parent threads are
+   * running and may mutate your state.  Avoid mutating any data belonging to
+   * the parent.  Avoid interacting with non-POD data that originated in the
+   * parent.  Avoid any libraries that may internally reference non-POD data.
+   * Especially beware parent mutexes -- for example, glog's LOG() uses one.
+   */
+  struct DangerousPostForkPreExecCallback {
+    virtual ~DangerousPostForkPreExecCallback() {}
+    // This must return 0 on success, or an `errno` error code.
+    virtual int operator()() = 0;
+  };
 
   /**
    * Class representing various options: file descriptor behavior, and
@@ -342,6 +361,43 @@ class Subprocess {
     }
 
     /**
+     * *** READ THIS WHOLE DOCBLOCK BEFORE USING ***
+     *
+     * Run this callback in the child after the fork, just before the
+     * exec(), and after the child's state has been completely set up:
+     *  - signal handlers have been reset to default handling and unblocked
+     *  - the working directory was set
+     *  - closed any file descriptors specified via Options()
+     *  - set child process flags (see code)
+     *
+     * This is EXTREMELY DANGEROUS. For example, this innocuous-looking code
+     * can cause a fraction of your Subprocess launches to hang forever:
+     *
+     *   LOG(INFO) << "Hello from the child";
+     *
+     * The reason is that glog has an internal mutex. If your fork() happens
+     * when the parent has the mutex locked, the child will wait forever.
+     *
+     * == GUIDELINES ==
+     *
+     * - Be quick -- the parent thread is blocked until you exit.
+     * - Remember that other parent threads are running, and may mutate your
+     *   state.
+     * - Avoid mutating any data belonging to the parent.
+     * - Avoid interacting with non-POD data that came from the parent.
+     * - Avoid any libraries that may internally reference non-POD state.
+     * - Especially beware parent mutexes, e.g. LOG() uses a global mutex.
+     * - Avoid invoking the parent's destructors (you can accidentally
+     *   delete files, terminate network connections, etc).
+     * - Read http://ewontfix.com/7/
+     */
+    Options& dangerousPostForkPreExecCallback(
+        DangerousPostForkPreExecCallback* cob) {
+      dangerousPostForkPreExecCallback_ = cob;
+      return *this;
+    }
+
+    /**
      * Helpful way to combine Options.
      */
     Options& operator|=(const Options& other);
@@ -356,6 +412,8 @@ class Subprocess {
     int parentDeathSignal_{0};
 #endif
     bool processGroupLeader_{false};
+    DangerousPostForkPreExecCallback*
+      dangerousPostForkPreExecCallback_{nullptr};
   };
 
   static Options pipeStdin() { return Options().stdin(PIPE); }
@@ -367,6 +425,14 @@ class Subprocess {
   Subprocess& operator=(const Subprocess&) = delete;
   Subprocess(Subprocess&&) = default;
   Subprocess& operator=(Subprocess&&) = default;
+
+  /**
+   * Create an uninitialized subprocess.
+   *
+   * In this state it can only be destroyed, or assigned to using the move
+   * assignment operator.
+   */
+  Subprocess();
 
   /**
    * Create a subprocess from the given arguments.  argv[0] must be listed.
@@ -556,7 +622,7 @@ class Subprocess {
    * expensive implementation choice, in order to make closeParentFd()
    * thread-safe.
    */
-  typedef std::function<bool(int, int)> FdCallback;
+  using FdCallback = folly::Function<bool(int, int)>;
   void communicate(FdCallback readCallback, FdCallback writeCallback);
 
   /**
@@ -565,17 +631,13 @@ class Subprocess {
    * descriptors.  Use the readLinesCallback() helper to get template
    * deduction.  For example:
    *
-   *   auto read_cb = Subprocess::readLinesCallback(
-   *     [](int fd, folly::StringPiece s) {
-   *       std::cout << fd << " said: " << s;
-   *       return false;  // Keep reading from the child
-   *     }
-   *   );
    *   subprocess.communicate(
-   *     // ReadLinesCallback contains StreamSplitter contains IOBuf, making
-   *     // it noncopyable, whereas std::function must be copyable.  So, we
-   *     // keep the callback in a local, and instead pass a reference.
-   *     std::ref(read_cb),
+   *     Subprocess::readLinesCallback(
+   *       [](int fd, folly::StringPiece s) {
+   *         std::cout << fd << " said: " << s;
+   *         return false;  // Keep reading from the child
+   *       }
+   *     ),
    *     [](int pdf, int cfd){ return true; }  // Don't write to the child
    *   );
    *
@@ -608,7 +670,7 @@ class Subprocess {
       uint64_t maxLineLength = 0,  // No line length limit by default
       char delimiter = '\n',
       uint64_t bufSize = 1024
-    ) : fdLineCb_(std::move(fdLineCb)),
+    ) : fdLineCb_(std::forward<Callback>(fdLineCb)),
         maxLineLength_(maxLineLength),
         delimiter_(delimiter),
         bufSize_(bufSize) {}
@@ -627,6 +689,7 @@ class Subprocess {
         if (ret == -1 && errno == EAGAIN) {  // No more data for now
           return false;
         }
+        checkUnixError(ret, "read");
         if (ret == 0) {  // Reached end-of-file
           splitter.flush();  // Ignore return since the file is over anyway
           return true;
@@ -648,14 +711,14 @@ class Subprocess {
 
   // Helper to enable template deduction
   template <class Callback>
-  static ReadLinesCallback<Callback> readLinesCallback(
+  static auto readLinesCallback(
       Callback&& fdLineCb,
-      uint64_t maxLineLength = 0,  // No line length limit by default
+      uint64_t maxLineLength = 0, // No line length limit by default
       char delimiter = '\n',
-      uint64_t bufSize = 1024) {
-    return ReadLinesCallback<Callback>(
-      std::move(fdLineCb), maxLineLength, delimiter, bufSize
-    );
+      uint64_t bufSize = 1024)
+      -> ReadLinesCallback<typename std::decay<Callback>::type> {
+    return ReadLinesCallback<typename std::decay<Callback>::type>(
+        std::forward<Callback>(fdLineCb), maxLineLength, delimiter, bufSize);
   }
 
   /**
@@ -766,9 +829,8 @@ class Subprocess {
   // Returns an index into pipes_. Throws std::invalid_argument if not found.
   size_t findByChildFd(const int childFd) const;
 
-
-  pid_t pid_;
-  ProcessReturnCode returnCode_;
+  pid_t pid_{-1};
+  ProcessReturnCode returnCode_{RV_NOT_STARTED};
 
   /**
    * Represents a pipe between this process, and the child process (or its
@@ -813,5 +875,3 @@ inline Subprocess::Options& Subprocess::Options::operator|=(
 }
 
 }  // namespace folly
-
-#endif /* FOLLY_SUBPROCESS_H_ */

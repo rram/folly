@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements. See the NOTICE file
@@ -21,6 +21,8 @@
 #pragma once
 
 #include <folly/io/async/TimeoutManager.h>
+
+#include <folly/portability/Event.h>
 
 #include <boost/noncopyable.hpp>
 #include <event.h>
@@ -219,7 +221,7 @@ class AsyncTimeout : private boost::noncopyable {
   );
 
  private:
-  static void libeventCallback(int fd, short events, void* arg);
+  static void libeventCallback(libevent_fd_t fd, short events, void* arg);
 
   struct event event_;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@
  *   dynamic str = "string";
  *   dynamic map = dynamic::object;
  *   map[str] = twelve;
- *   map[str + "another_str"] = { "array", "of", 4, "elements" };
+ *   map[str + "another_str"] = dynamic::array("array", "of", 4, "elements");
  *   map.insert("null_element", nullptr);
  *   ++map[str];
  *   assert(map[str] == 13);
@@ -39,7 +39,7 @@
  *   // Building a complex object with a sub array inline:
  *   dynamic d = dynamic::object
  *     ("key", "value")
- *     ("key2", { "a", "array" })
+ *     ("key2", dynamic::array("a", "array"))
  *     ;
  *
  * Also see folly/json.h for the serialization and deserialization
@@ -60,8 +60,7 @@
  * @author Jordan DeLong <delong.j@fb.com>
  */
 
-#ifndef FOLLY_DYNAMIC_H_
-#define FOLLY_DYNAMIC_H_
+#pragma once
 
 #include <cstdint>
 #include <initializer_list>
@@ -75,7 +74,6 @@
 
 #include <boost/operators.hpp>
 
-#include <folly/FBString.h>
 #include <folly/Range.h>
 #include <folly/Traits.h>
 
@@ -118,24 +116,34 @@ public:
   struct const_item_iterator;
 
   /*
-   * Creation routines for making dynamic objects.  Objects are maps
-   * from key to value (so named due to json-related origins here).
+   * Creation routines for making dynamic objects and arrays.  Objects
+   * are maps from key to value (so named due to json-related origins
+   * here).
    *
    * Example:
    *
    *   // Make a fairly complex dynamic:
    *   dynamic d = dynamic::object("key", "value1")
-   *                              ("key2", { "value", "with", 4, "words" });
+   *                              ("key2", dynamic::array("value",
+   *                                                      "with",
+   *                                                      4,
+   *                                                      "words"));
    *
    *   // Build an object in a few steps:
    *   dynamic d = dynamic::object;
    *   d["key"] = 12;
-   *   d["something_else"] = { 1, 2, 3, nullptr };
+   *   d["something_else"] = dynamic::array(1, 2, 3, nullptr);
    */
 private:
+  struct PrivateTag {};
+  struct EmptyArrayTag {};
   struct ObjectMaker;
 
 public:
+  static void array(EmptyArrayTag);
+  template <class... Args>
+  static dynamic array(Args&& ...args);
+
   static ObjectMaker object();
   static ObjectMaker object(dynamic&&, dynamic&&);
   static ObjectMaker object(dynamic const&, dynamic&&);
@@ -148,13 +156,13 @@ public:
   /* implicit */ dynamic(StringPiece val);
   /* implicit */ dynamic(char const* val);
   /* implicit */ dynamic(std::string const& val);
-  /* implicit */ dynamic(fbstring const& val);
-  /* implicit */ dynamic(fbstring&& val);
+  /* implicit */ dynamic(std::string&& val);
 
   /*
-   * This is part of the plumbing for object(), above.  Used to create
-   * a new object dynamic.
+   * This is part of the plumbing for array() and object(), above.
+   * Used to create a new array or object dynamic.
    */
+  /* implicit */ dynamic(void (*)(EmptyArrayTag));
   /* implicit */ dynamic(ObjectMaker (*)());
   /* implicit */ dynamic(ObjectMaker const&) = delete;
   /* implicit */ dynamic(ObjectMaker&&);
@@ -166,7 +174,14 @@ public:
    *
    *   dynamic v = { 1, 2, 3, "foo" };
    */
+  // TODO(ott, 10300209): Remove once all uses have been eradicated.
+
+  FOLLY_DEPRECATED(
+      "Initializer list syntax is deprecated (#10300209). Use dynamic::array.")
   /* implicit */ dynamic(std::initializer_list<dynamic> il);
+  FOLLY_DEPRECATED(
+      "Initializer list syntax is deprecated (#10300209). Use dynamic::array.")
+  dynamic& operator=(std::initializer_list<dynamic> il);
 
   /*
    * Conversion constructors from most of the other types.
@@ -273,7 +288,7 @@ public:
    * since arrays and objects are generally best dealt with as a
    * dynamic.
    */
-  fbstring asString() const;
+  std::string asString() const;
   double   asDouble() const;
   int64_t  asInt() const;
   bool     asBool() const;
@@ -283,15 +298,15 @@ public:
    *
    * These will throw a TypeError if the dynamic has a different type.
    */
-  const fbstring& getString() const&;
+  const std::string& getString() const&;
   double          getDouble() const&;
   int64_t         getInt() const&;
   bool            getBool() const&;
-  fbstring& getString() &;
+  std::string& getString() &;
   double&   getDouble() &;
   int64_t&  getInt() &;
   bool&     getBool() &;
-  fbstring getString() &&;
+  std::string getString() &&;
   double   getDouble() &&;
   int64_t  getInt() &&;
   bool     getBool() &&;
@@ -437,6 +452,23 @@ public:
   template<class K, class V> void insert(K&&, V&& val);
 
   /*
+   * These functions merge two folly dynamic objects.
+   * The "update" and "update_missing" functions extend the object by
+   *  inserting the key/value pairs of mergeObj into the current object.
+   *  For update, if key is duplicated between the two objects, it
+   *  will overwrite with the value of the object being inserted (mergeObj).
+   *  For "update_missing", it will prefer the value in the original object
+   *
+   * The "merge" function creates a new object consisting of the key/value
+   * pairs of both mergeObj1 and mergeObj2
+   * If the key is duplicated between the two objects,
+   *  it will prefer value in the second object (mergeObj2)
+   */
+  void update(const dynamic& mergeObj);
+  void update_missing(const dynamic& other);
+  static dynamic merge(const dynamic& mergeObj1, const dynamic& mergeObj2);
+
+  /*
    * Erase an element from a dynamic object, by key.
    *
    * Invalidates iterators to the element being erased.
@@ -503,6 +535,8 @@ private:
   template<class T> struct GetAddrImpl;
   template<class T> struct PrintImpl;
 
+  dynamic(Array&& array, PrivateTag);
+
   template<class T> T const& get() const;
   template<class T> T&       get();
   template<class T> T*       get_nothrow() & noexcept;
@@ -531,7 +565,7 @@ private:
     bool boolean;
     double doubl;
     int64_t integer;
-    fbstring string;
+    std::string string;
 
     /*
      * Objects are placement new'd here.  We have to use a char buffer
@@ -552,5 +586,3 @@ private:
 }
 
 #include <folly/dynamic-inl.h>
-
-#endif

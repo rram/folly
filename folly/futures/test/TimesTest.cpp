@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #include <memory>
 #include <mutex>
+#include <queue>
 
 #include <gtest/gtest.h>
 #include <glog/logging.h>
@@ -41,9 +42,8 @@ inline std::function<Future<Unit>(void)> makeThunk(
     std::mutex& ps_mutex) {
   return [&]() mutable {
     auto p = std::make_shared<Promise<Unit>>();
-    p->setInterruptHandler([&](exception_wrapper const& e) {
-      ++interrupt;
-    });
+    p->setInterruptHandler(
+        [&](exception_wrapper const& /* e */) { ++interrupt; });
     ps_mutex.lock();
     ps.push(p);
     ps_mutex.unlock();
@@ -68,9 +68,9 @@ TEST(Times, success) {
   bool failure = false;
 
   auto thunk = makeThunk(ps, interrupt, ps_mutex);
-  auto f = folly::times(3, thunk)
-    .then([&]() mutable { complete = true; })
-    .onError([&] (FutureException& e) { failure = true; });
+  auto f = folly::times(3, thunk).then([&]() mutable {
+    complete = true;
+  }).onError([&](FutureException& /* e */) { failure = true; });
 
   popAndFulfillPromise(ps, ps_mutex);
   EXPECT_FALSE(complete);
@@ -94,9 +94,9 @@ TEST(Times, failure) {
   bool failure = false;
 
   auto thunk = makeThunk(ps, interrupt, ps_mutex);
-  auto f = folly::times(3, thunk)
-    .then([&]() mutable { complete = true; })
-    .onError([&] (FutureException& e) { failure = true; });
+  auto f = folly::times(3, thunk).then([&]() mutable {
+    complete = true;
+  }).onError([&](FutureException& /* e */) { failure = true; });
 
   popAndFulfillPromise(ps, ps_mutex);
   EXPECT_FALSE(complete);
@@ -122,9 +122,9 @@ TEST(Times, interrupt) {
   bool failure = false;
 
   auto thunk = makeThunk(ps, interrupt, ps_mutex);
-  auto f = folly::times(3, thunk)
-    .then([&]() mutable { complete = true; })
-    .onError([&] (FutureException& e) { failure = true; });
+  auto f = folly::times(3, thunk).then([&]() mutable {
+    complete = true;
+  }).onError([&](FutureException& /* e */) { failure = true; });
 
   EXPECT_EQ(0, interrupt);
 

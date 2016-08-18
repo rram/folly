@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef CPORTABILITY_H
-#define CPORTABILITY_H
+#pragma once
 
 /* These definitions are in a separate file so that they
  * may be included from C- as well as C++-based projects. */
@@ -37,7 +36,10 @@
  * has issues when inlining is used, so disable that as well. */
 #ifdef FOLLY_SANITIZE_ADDRESS
 # if defined(__clang__)
-#  if __has_attribute(__no_address_safety_analysis__)
+#  if __has_attribute(__no_sanitize__)
+#   define FOLLY_DISABLE_ADDRESS_SANITIZER \
+      __attribute__((__no_sanitize__("address"), __noinline__))
+#  elif __has_attribute(__no_address_safety_analysis__)
 #   define FOLLY_DISABLE_ADDRESS_SANITIZER \
       __attribute__((__no_address_safety_analysis__, __noinline__))
 #  elif __has_attribute(__no_sanitize_address__)
@@ -53,4 +55,28 @@
 # define FOLLY_DISABLE_ADDRESS_SANITIZER
 #endif
 
+/* Define a convenience macro to test when thread sanitizer is being used
+ * across the different compilers (e.g. clang, gcc) */
+#if defined(__clang__)
+# if __has_feature(thread_sanitizer)
+#  define FOLLY_SANITIZE_THREAD 1
+# endif
+#elif defined(__GNUC__) && __SANITIZE_THREAD__
+# define FOLLY_SANITIZE_THREAD 1
 #endif
+
+/**
+ * ASAN/MSAN/TSAN define pre-processor symbols:
+ * ADDRESS_SANITIZER/MEMORY_SANITIZER/THREAD_SANITIZER.
+ *
+ * UBSAN doesn't define anything and makes it hard to
+ * conditionally compile.
+ *
+ * The build system should define UNDEFINED_SANITIZER=1 when UBSAN is
+ * used as folly whitelists some functions.
+ */
+#if UNDEFINED_SANITIZER
+# define UBSAN_DISABLE(x) __attribute__((no_sanitize(x)))
+#else
+# define UBSAN_DISABLE(x)
+#endif // UNDEFINED_SANITIZER

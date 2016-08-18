@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,15 +20,16 @@
 
 #include <folly/SocketAddress.h>
 
+#include <folly/Exception.h>
 #include <folly/Hash.h>
 
 #include <boost/functional/hash.hpp>
-#include <boost/static_assert.hpp>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
 #include <sstream>
 #include <string>
+#include <system_error>
 
 namespace {
 
@@ -36,7 +37,7 @@ namespace {
  * A structure to free a struct addrinfo when it goes out of scope.
  */
 struct ScopedAddrInfo {
-  explicit ScopedAddrInfo(struct addrinfo* info) : info(info) {}
+  explicit ScopedAddrInfo(struct addrinfo* addrinfo) : info(addrinfo) {}
   ~ScopedAddrInfo() {
     freeaddrinfo(info);
   }
@@ -180,32 +181,70 @@ void SocketAddress::setFromHostPort(const char* hostAndPort) {
   setFromAddrInfo(results.info);
 }
 
-void SocketAddress::setFromPath(const char* path, size_t len) {
+int SocketAddress::getPortFrom(const struct sockaddr* address) {
+  switch (address->sa_family) {
+    case AF_INET:
+      return ntohs(((sockaddr_in*)address)->sin_port);
+
+    case AF_INET6:
+      return ntohs(((sockaddr_in6*)address)->sin6_port);
+
+    default:
+      return -1;
+  }
+}
+
+const char* SocketAddress::getFamilyNameFrom(
+    const struct sockaddr* address,
+    const char* defaultResult) {
+#define GETFAMILYNAMEFROM_IMPL(Family) \
+  case Family:                         \
+    return #Family
+
+  switch (address->sa_family) {
+    GETFAMILYNAMEFROM_IMPL(AF_INET);
+    GETFAMILYNAMEFROM_IMPL(AF_INET6);
+    GETFAMILYNAMEFROM_IMPL(AF_UNIX);
+    GETFAMILYNAMEFROM_IMPL(AF_UNSPEC);
+
+    default:
+      return defaultResult;
+  }
+
+#undef GETFAMILYNAMEFROM_IMPL
+}
+
+void SocketAddress::setFromPath(StringPiece path) {
+  // Before we touch storage_, check to see if the length is too big.
+  // Note that "storage_.un.addr->sun_path" may not be safe to evaluate here,
+  // but sizeof() just uses its type, and does't evaluate it.
+  if (path.size() > sizeof(storage_.un.addr->sun_path)) {
+    throw std::invalid_argument(
+        "socket path too large to fit into sockaddr_un");
+  }
+
   if (!external_) {
     storage_.un.init();
     external_ = true;
   }
 
+  size_t len = path.size();
   storage_.un.len = offsetof(struct sockaddr_un, sun_path) + len;
-  if (len > sizeof(storage_.un.addr->sun_path)) {
-    throw std::invalid_argument(
-      "socket path too large to fit into sockaddr_un");
-  } else if (len == sizeof(storage_.un.addr->sun_path)) {
-    // Note that there will be no terminating NUL in this case.
-    // We allow this since getsockname() and getpeername() may return
-    // Unix socket addresses with paths that fit exactly in sun_path with no
-    // terminating NUL.
-    memcpy(storage_.un.addr->sun_path, path, len);
-  } else {
-    memcpy(storage_.un.addr->sun_path, path, len + 1);
+  memcpy(storage_.un.addr->sun_path, path.data(), len);
+  // If there is room, put a terminating NUL byte in sun_path.  In general the
+  // path should be NUL terminated, although getsockname() and getpeername()
+  // may return Unix socket addresses with paths that fit exactly in sun_path
+  // with no terminating NUL.
+  if (len < sizeof(storage_.un.addr->sun_path)) {
+    storage_.un.addr->sun_path[len] = '\0';
   }
 }
 
-void SocketAddress::setFromPeerAddress(SocketDesc socket) {
+void SocketAddress::setFromPeerAddress(int socket) {
   setFromSocket(socket, getpeername);
 }
 
-void SocketAddress::setFromLocalAddress(SocketDesc socket) {
+void SocketAddress::setFromLocalAddress(int socket) {
   setFromSocket(socket, getsockname);
 }
 
@@ -605,7 +644,9 @@ void SocketAddress::setFromLocalAddr(const struct addrinfo* info) {
   setFromSockaddr(info->ai_addr, info->ai_addrlen);
 }
 
-void SocketAddress::setFromSocket(SocketDesc socket, GetPeerNameFunc fn) {
+void SocketAddress::setFromSocket(
+    int socket,
+    int (*fn)(int, struct sockaddr*, socklen_t*)) {
   // Try to put the address into a local storage buffer.
   sockaddr_storage tmp_sock;
   socklen_t addrLen = sizeof(tmp_sock);

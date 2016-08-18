@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@
  *
  * @author Jordan DeLong <delong.j@fb.com>
  */
-#ifndef FOLLY_SMALL_VECTOR_H_
-#define FOLLY_SMALL_VECTOR_H_
+
+#pragma once
 
 #include <stdexcept>
 #include <cstdlib>
@@ -42,32 +42,13 @@
 #include <boost/mpl/empty.hpp>
 #include <boost/mpl/size.hpp>
 #include <boost/mpl/count.hpp>
-#include <boost/mpl/max.hpp>
 
 #include <folly/FormatTraits.h>
 #include <folly/Malloc.h>
 #include <folly/Portability.h>
-
-#if defined(__GNUC__) && FOLLY_X64
-# include <folly/SmallLocks.h>
-# define FB_PACK_ATTR FOLLY_PACK_ATTR
-# define FB_PACK_PUSH FOLLY_PACK_PUSH
-# define FB_PACK_POP FOLLY_PACK_POP
-#else
-# define FB_PACK_ATTR
-# define FB_PACK_PUSH
-# define FB_PACK_POP
-#endif
-
-#if FOLLY_HAVE_MALLOC_SIZE
-  extern "C" std::size_t malloc_size(const void*);
-# if !FOLLY_HAVE_MALLOC_USABLE_SIZE
-#  define malloc_usable_size malloc_size
-# endif
-# ifndef malloc_usable_size
-#  define malloc_usable_size malloc_size
-# endif
-#endif
+#include <folly/SmallLocks.h>
+#include <folly/portability/Constexpr.h>
+#include <folly/portability/Malloc.h>
 
 // Ignore shadowing warnings within this file, so includers can use -Wshadow.
 #pragma GCC diagnostic push
@@ -342,7 +323,7 @@ namespace detail {
 }
 
 //////////////////////////////////////////////////////////////////////
-FB_PACK_PUSH
+FOLLY_PACK_PUSH
 template<class Value,
          std::size_t RequestedMaxInline    = 1,
          class PolicyA                     = void,
@@ -364,10 +345,8 @@ class small_vector
    * into our value_type*, we will inline more than they asked.)
    */
   enum {
-    MaxInline = boost::mpl::max<
-                  boost::mpl::int_<sizeof(Value*) / sizeof(Value)>,
-                  boost::mpl::int_<RequestedMaxInline>
-                >::type::value
+    MaxInline =
+        constexpr_max(sizeof(Value*) / sizeof(Value), RequestedMaxInline),
   };
 
 public:
@@ -883,7 +862,7 @@ private:
       // With iterators that only allow a single pass, we can't really
       // do anything sane here.
       while (first != last) {
-        push_back(*first++);
+        emplace_back(*first++);
       }
       return;
     }
@@ -1044,7 +1023,7 @@ private:
     InternalSizeType* getCapacity() {
       return &capacity_;
     }
-  } FB_PACK_ATTR;
+  } FOLLY_PACK_ATTR;
 
   struct HeapPtr {
     // Lower order bit of heap_ is used as flag to indicate whether capacity is
@@ -1056,16 +1035,22 @@ private:
       return static_cast<InternalSizeType*>(
         detail::pointerFlagClear(heap_));
     }
-  } FB_PACK_ATTR;
+  } FOLLY_PACK_ATTR;
 
-#if FOLLY_X64
-  typedef unsigned char InlineStorageType[sizeof(value_type) * MaxInline];
+#if (FOLLY_X64 || FOLLY_PPC64)
+  typedef unsigned char InlineStorageDataType[sizeof(value_type) * MaxInline];
 #else
   typedef typename std::aligned_storage<
     sizeof(value_type) * MaxInline,
     alignof(value_type)
-  >::type InlineStorageType;
+  >::type InlineStorageDataType;
 #endif
+
+  typedef typename std::conditional<
+    sizeof(value_type) * MaxInline != 0,
+    InlineStorageDataType,
+    void*
+  >::type InlineStorageType;
 
   static bool const kHasInlineCapacity =
     sizeof(HeapPtrWithCapacity) < sizeof(InlineStorageType);
@@ -1125,9 +1110,9 @@ private:
       auto vp = detail::pointerFlagClear(pdata_.heap_);
       free(vp);
     }
-  } FB_PACK_ATTR u;
-} FB_PACK_ATTR;
-FB_PACK_POP
+  } FOLLY_PACK_ATTR u;
+} FOLLY_PACK_ATTR;
+FOLLY_PACK_POP
 
 //////////////////////////////////////////////////////////////////////
 
@@ -1154,11 +1139,3 @@ struct IndexableTraits<small_vector<T, M, A, B, C>>
 }  // namespace folly
 
 #pragma GCC diagnostic pop
-
-#ifdef FB_PACK_ATTR
-# undef FB_PACK_ATTR
-# undef FB_PACK_PUSH
-# undef FB_PACK_POP
-#endif
-
-#endif

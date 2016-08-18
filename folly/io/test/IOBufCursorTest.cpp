@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,16 +16,11 @@
 
 #include <folly/io/IOBuf.h>
 
-#include <gflags/gflags.h>
-#include <boost/random.hpp>
-#include <gtest/gtest.h>
-#include <folly/Benchmark.h>
 #include <folly/Format.h>
 #include <folly/Range.h>
 #include <folly/io/Cursor.h>
-#include <folly/io/Cursor-defs.h>
 
-DECLARE_bool(benchmark);
+#include <gtest/gtest.h>
 
 using folly::ByteRange;
 using folly::format;
@@ -40,7 +35,7 @@ TEST(IOBuf, RWCursor) {
   unique_ptr<IOBuf> iobuf2(IOBuf::create(20));
   iobuf2->append(20);
 
-  IOBuf* iob2ptr = iobuf2.get();
+  iobuf2.get();
   iobuf1->prependChain(std::move(iobuf2));
 
   EXPECT_TRUE(iobuf1->isChained());
@@ -186,10 +181,10 @@ void append(Appender& appender, StringPiece data) {
 std::string toString(const IOBuf& buf) {
   std::string str;
   Cursor cursor(&buf);
-  std::pair<const uint8_t*, size_t> p;
-  while ((p = cursor.peek()).second) {
-    str.append(reinterpret_cast<const char*>(p.first), p.second);
-    cursor.skip(p.second);
+  ByteRange b;
+  while (!(b = cursor.peekBytes()).empty()) {
+    str.append(reinterpret_cast<const char*>(b.data()), b.size());
+    cursor.skip(b.size());
   }
   return str;
 }
@@ -222,18 +217,15 @@ TEST(IOBuf, PullAndPeek) {
 
   {
     RWPrivateCursor cursor(iobuf1.get());
-    auto p = cursor.peek();
-    EXPECT_EQ("he", std::string(reinterpret_cast<const char*>(p.first),
-                                p.second));
-    cursor.skip(p.second);
-    p = cursor.peek();
-    EXPECT_EQ("llo ", std::string(reinterpret_cast<const char*>(p.first),
-                                  p.second));
-    cursor.skip(p.second);
-    p = cursor.peek();
-    EXPECT_EQ("world", std::string(reinterpret_cast<const char*>(p.first),
-                                   p.second));
-    cursor.skip(p.second);
+    auto b = cursor.peekBytes();
+    EXPECT_EQ("he", StringPiece(b));
+    cursor.skip(b.size());
+    b = cursor.peekBytes();
+    EXPECT_EQ("llo ", StringPiece(b));
+    cursor.skip(b.size());
+    b = cursor.peekBytes();
+    EXPECT_EQ("world", StringPiece(b));
+    cursor.skip(b.size());
     EXPECT_EQ(3, iobuf1->countChainElements());
     EXPECT_EQ(11, iobuf1->computeChainDataLength());
   }
@@ -241,9 +233,8 @@ TEST(IOBuf, PullAndPeek) {
   {
     RWPrivateCursor cursor(iobuf1.get());
     cursor.gather(11);
-    auto p = cursor.peek();
-    EXPECT_EQ("hello world", std::string(reinterpret_cast<const
-                                         char*>(p.first), p.second));
+    auto b = cursor.peekBytes();
+    EXPECT_EQ("hello world", StringPiece(b));
     EXPECT_EQ(1, iobuf1->countChainElements());
     EXPECT_EQ(11, iobuf1->computeChainDataLength());
   }
@@ -381,7 +372,7 @@ TEST(IOBuf, cloneAndInsert) {
     EXPECT_EQ(7, iobuf1->countChainElements());
     EXPECT_EQ(14, iobuf1->computeChainDataLength());
     // Check that nextBuf got set correctly to the buffer with 1 byte left
-    EXPECT_EQ(1, cursor.peek().second);
+    EXPECT_EQ(1, cursor.peekBytes().size());
     cursor.read<uint8_t>();
   }
 
@@ -413,6 +404,47 @@ TEST(IOBuf, cloneAndInsert) {
     // Check that nextBuf got set correctly
     cursor.read<uint8_t>();
   }
+}
+
+TEST(IOBuf, cloneWithEmptyBufAtStart) {
+  folly::IOBufEqual eq;
+  auto empty = IOBuf::create(0);
+  auto hel = IOBuf::create(3);
+  append(hel, "hel");
+  auto lo = IOBuf::create(2);
+  append(lo, "lo");
+
+  auto iobuf = empty->clone();
+  iobuf->prependChain(hel->clone());
+  iobuf->prependChain(lo->clone());
+  iobuf->prependChain(empty->clone());
+  iobuf->prependChain(hel->clone());
+  iobuf->prependChain(lo->clone());
+  iobuf->prependChain(empty->clone());
+  iobuf->prependChain(lo->clone());
+  iobuf->prependChain(hel->clone());
+  iobuf->prependChain(lo->clone());
+  iobuf->prependChain(lo->clone());
+
+  Cursor cursor(iobuf.get());
+  std::unique_ptr<IOBuf> cloned;
+  char data[3];
+  cursor.pull(&data, 3);
+  cursor.clone(cloned, 2);
+  EXPECT_EQ(1, cloned->countChainElements());
+  EXPECT_EQ(2, cloned->length());
+  EXPECT_TRUE(eq(lo, cloned));
+
+  cursor.pull(&data, 3);
+  EXPECT_EQ("hel", std::string(data, sizeof(data)));
+
+  cursor.skip(2);
+  cursor.clone(cloned, 2);
+  EXPECT_TRUE(eq(lo, cloned));
+
+  std::string hello = cursor.readFixedString(5);
+  cursor.clone(cloned, 2);
+  EXPECT_TRUE(eq(lo, cloned));
 }
 
 TEST(IOBuf, Appender) {
@@ -577,6 +609,24 @@ TEST(IOBuf, CursorOperators) {
     c.skip(5);
     EXPECT_TRUE(c.isAtEnd());
   }
+
+  // Test canAdvance with a chain of items
+  {
+    auto chain = IOBuf::create(10);
+    chain->append(10);
+    chain->appendChain(chain->clone());
+    EXPECT_EQ(2, chain->countChainElements());
+    EXPECT_EQ(20, chain->computeChainDataLength());
+
+    Cursor c(chain.get());
+    for (size_t i = 0; i <= 20; ++i) {
+      EXPECT_TRUE(c.canAdvance(i));
+    }
+    EXPECT_FALSE(c.canAdvance(21));
+    c.skip(10);
+    EXPECT_TRUE(c.canAdvance(10));
+    EXPECT_FALSE(c.canAdvance(11));
+  }
 }
 
 TEST(IOBuf, StringOperations) {
@@ -642,6 +692,33 @@ TEST(IOBuf, StringOperations) {
     EXPECT_STREQ("hello", curs.readTerminatedString().c_str());
   }
 
+  // Test reading a null-terminated string from a chain that doesn't contain the
+  // terminator
+  {
+    std::unique_ptr<IOBuf> buf(IOBuf::create(8));
+    Appender app(buf.get(), 0);
+    app.push(reinterpret_cast<const uint8_t*>("hello"), 5);
+    std::unique_ptr<IOBuf> chain(IOBuf::create(8));
+    chain->prependChain(std::move(buf));
+
+    Cursor curs(chain.get());
+    EXPECT_THROW(curs.readTerminatedString(),
+                 std::out_of_range);
+  }
+
+  // Test reading a null-terminated string past the maximum length
+  {
+    std::unique_ptr<IOBuf> buf(IOBuf::create(8));
+    Appender app(buf.get(), 0);
+    app.push(reinterpret_cast<const uint8_t*>("hello\0"), 6);
+    std::unique_ptr<IOBuf> chain(IOBuf::create(8));
+    chain->prependChain(std::move(buf));
+
+    Cursor curs(chain.get());
+    EXPECT_THROW(curs.readTerminatedString('\0', 3),
+                 std::length_error);
+  }
+
   // Test reading a two fixed-length strings from a single buffer with an extra
   // uint8_t at the end
   {
@@ -694,90 +771,95 @@ TEST(IOBuf, StringOperations) {
   }
 }
 
-int benchmark_size = 1000;
-unique_ptr<IOBuf> iobuf_benchmark;
+TEST(IOBuf, ReadWhileTrue) {
+  auto isAlpha = [](uint8_t ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+  };
+  auto isDigit = [](uint8_t ch) { return (ch >= '0' && ch <= '9'); };
 
-unique_ptr<IOBuf> iobuf_read_benchmark;
+  // Test reading alternating alphabetic and numeric strings
+  {
+    std::unique_ptr<IOBuf> chain(IOBuf::create(32));
+    Appender app(chain.get(), 0);
+    app.push(StringPiece("hello123world456"));
 
-template <class CursClass>
-void runBenchmark() {
-  CursClass c(iobuf_benchmark.get());
-
-  for(int i = 0; i < benchmark_size; i++) {
-    c.write((uint8_t)0);
-  }
-}
-
-BENCHMARK(rwPrivateCursorBenchmark, iters) {
-  while (iters--) {
-    runBenchmark<RWPrivateCursor>();
-  }
-}
-
-BENCHMARK(rwUnshareCursorBenchmark, iters) {
-  while (iters--) {
-    runBenchmark<RWUnshareCursor>();
-  }
-}
-
-
-BENCHMARK(cursorBenchmark, iters) {
-  while (iters--) {
-    Cursor c(iobuf_read_benchmark.get());
-    for(int i = 0; i < benchmark_size ; i++) {
-      c.read<uint8_t>();
-    }
-  }
-}
-
-BENCHMARK(skipBenchmark, iters) {
-  uint8_t buf;
-  while (iters--) {
-    Cursor c(iobuf_read_benchmark.get());
-    for(int i = 0; i < benchmark_size ; i++) {
-      c.peek();
-      c.skip(1);
-    }
-  }
-}
-
-// fbmake opt
-// _bin/folly/experimental/io/test/iobuf_cursor_test -benchmark
-//
-// Benchmark                               Iters   Total t    t/iter iter/sec
-// ---------------------------------------------------------------------------
-// rwPrivateCursorBenchmark               100000  142.9 ms  1.429 us  683.5 k
-// rwUnshareCursorBenchmark               100000  309.3 ms  3.093 us  315.7 k
-// cursorBenchmark                        100000  741.4 ms  7.414 us  131.7 k
-// skipBenchmark                          100000  738.9 ms  7.389 us  132.2 k
-//
-// uname -a:
-//
-// Linux dev2159.snc6.facebook.com 2.6.33-7_fbk15_104e4d0 #1 SMP
-// Tue Oct 19 22:40:30 PDT 2010 x86_64 x86_64 x86_64 GNU/Linux
-//
-// 72GB RAM, 2 CPUs (Intel(R) Xeon(R) CPU L5630  @ 2.13GHz)
-// hyperthreading disabled
-
-int main(int argc, char** argv) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-
-  auto ret = RUN_ALL_TESTS();
-
-  if (ret == 0 && FLAGS_benchmark) {
-    iobuf_benchmark = IOBuf::create(benchmark_size);
-    iobuf_benchmark->append(benchmark_size);
-
-    iobuf_read_benchmark = IOBuf::create(1);
-    for (int i = 0; i < benchmark_size; i++) {
-      unique_ptr<IOBuf> iobuf2(IOBuf::create(1));
-      iobuf2->append(1);
-      iobuf_read_benchmark->prependChain(std::move(iobuf2));
-    }
-
-    folly::runBenchmarks();
+    Cursor curs(chain.get());
+    EXPECT_STREQ("hello", curs.readWhile(isAlpha).c_str());
+    EXPECT_STREQ("123", curs.readWhile(isDigit).c_str());
+    EXPECT_STREQ("world", curs.readWhile(isAlpha).c_str());
+    EXPECT_STREQ("456", curs.readWhile(isDigit).c_str());
+    EXPECT_TRUE(curs.isAtEnd());
   }
 
-  return ret;
+  // The same, but also use skipWhile()
+  {
+    std::unique_ptr<IOBuf> chain(IOBuf::create(16));
+    Appender app(chain.get(), 0);
+    app.push(StringPiece("hello123world456"));
+
+    Cursor curs(chain.get());
+    EXPECT_STREQ("hello", curs.readWhile(isAlpha).c_str());
+    curs.skipWhile(isDigit);
+    curs.skipWhile(isAlpha);
+    EXPECT_STREQ("456", curs.readWhile(isDigit).c_str());
+    EXPECT_TRUE(curs.isAtEnd());
+  }
+
+  // Test readWhile() using data split across multiple buffers,
+  // including some empty buffers in the middle of the chain.
+  {
+    std::unique_ptr<IOBuf> chain;
+
+    // First element in the chain has "he"
+    auto buf = IOBuf::create(40);
+    Appender app(buf.get(), 0);
+    app.push(StringPiece("he"));
+    chain = std::move(buf);
+
+    // The second element has "ll", after 10 bytes of headroom
+    buf = IOBuf::create(40);
+    buf->advance(10);
+    app = Appender{buf.get(), 0};
+    app.push(StringPiece("ll"));
+    chain->prependChain(std::move(buf));
+
+    // The third element is empty
+    buf = IOBuf::create(40);
+    buf->advance(15);
+    chain->prependChain(std::move(buf));
+
+    // The fourth element has "o12"
+    buf = IOBuf::create(40);
+    buf->advance(37);
+    app = Appender{buf.get(), 0};
+    app.push(StringPiece("o12"));
+    chain->prependChain(std::move(buf));
+
+    // The fifth element has "3"
+    buf = IOBuf::create(40);
+    app = Appender{buf.get(), 0};
+    app.push(StringPiece("3"));
+    chain->prependChain(std::move(buf));
+
+    // The sixth element is empty
+    buf = IOBuf::create(40);
+    chain->prependChain(std::move(buf));
+
+    // The seventh element has "world456"
+    buf = IOBuf::create(40);
+    app = Appender{buf.get(), 0};
+    app.push(StringPiece("world456"));
+    chain->prependChain(std::move(buf));
+
+    // The eighth element is empty
+    buf = IOBuf::create(40);
+    chain->prependChain(std::move(buf));
+
+    Cursor curs(chain.get());
+    EXPECT_STREQ("hello", curs.readWhile(isAlpha).c_str());
+    EXPECT_STREQ("123", curs.readWhile(isDigit).c_str());
+    EXPECT_STREQ("world", curs.readWhile(isAlpha).c_str());
+    EXPECT_STREQ("456", curs.readWhile(isDigit).c_str());
+    EXPECT_TRUE(curs.isAtEnd());
+  }
 }

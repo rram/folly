@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_CHECKSUM_H_
-#define FOLLY_CHECKSUM_H_
+#pragma once
 
 #include <stdint.h>
 #include <cstddef>
@@ -39,5 +38,3 @@ uint32_t crc32c(const uint8_t* data, size_t nbytes,
     uint32_t startingChecksum = ~0U);
 
 } // folly
-
-#endif /* FOLLY_CHECKSUM_H_ */

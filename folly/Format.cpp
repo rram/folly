@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 
 #include <folly/Format.h>
+
+#include <folly/portability/Constexpr.h>
 
 #include <double-conversion/double-conversion.h>
 
@@ -48,11 +50,13 @@ void FormatValue<double>::formatHelper(
   }
 
   // 2+: for null terminator and optional sign shenanigans.
-  char buf[2 + std::max({
-      (2 + DoubleToStringConverter::kMaxFixedDigitsBeforePoint +
-       DoubleToStringConverter::kMaxFixedDigitsAfterPoint),
-      (8 + DoubleToStringConverter::kMaxExponentialDigits),
-      (7 + DoubleToStringConverter::kMaxPrecisionDigits)})];
+  constexpr size_t bufLen =
+      2 + constexpr_max(
+              2 + DoubleToStringConverter::kMaxFixedDigitsBeforePoint +
+                  DoubleToStringConverter::kMaxFixedDigitsAfterPoint,
+              constexpr_max(8 + DoubleToStringConverter::kMaxExponentialDigits,
+                            7 + DoubleToStringConverter::kMaxPrecisionDigits));
+  char buf[bufLen];
   StringBuilder builder(buf + 1, static_cast<int> (sizeof(buf) - 1));
 
   char plusSign;
@@ -210,11 +214,11 @@ void FormatArg::initSlow() {
     }
 
     auto readInt = [&] {
-      auto const b = p;
+      auto const c = p;
       do {
         ++p;
       } while (p != end && *p >= '0' && *p <= '9');
-      return to<int>(StringPiece(b, p));
+      return to<int>(StringPiece(c, p));
     };
 
     if (*p == '*') {
@@ -238,12 +242,12 @@ void FormatArg::initSlow() {
     }
 
     if (*p == '.') {
-      auto b = ++p;
+      auto d = ++p;
       while (p != end && *p >= '0' && *p <= '9') {
         ++p;
       }
-      if (p != b) {
-        precision = to<int>(StringPiece(b, p));
+      if (p != d) {
+        precision = to<int>(StringPiece(d, p));
         if (p != end && *p == '.') {
           trailingDot = true;
           ++p;

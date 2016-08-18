@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,13 +17,11 @@
 #include <folly/FileUtil.h>
 
 #include <cerrno>
-#ifdef __APPLE__
-#include <fcntl.h>
-#endif
-#include <sys/file.h>
-#include <sys/socket.h>
 
 #include <folly/detail/FileUtilDetail.h>
+#include <folly/portability/Fcntl.h>
+#include <folly/portability/Sockets.h>
+#include <folly/portability/SysFile.h>
 
 namespace folly {
 
@@ -85,7 +83,7 @@ int flockNoInt(int fd, int operation) {
 }
 
 int shutdownNoInt(int fd, int how) {
-  return wrapNoInt(shutdown, fd, how);
+  return wrapNoInt(portability::sockets::shutdown, fd, how);
 }
 
 ssize_t readNoInt(int fd, void* buf, size_t count) {
@@ -97,7 +95,7 @@ ssize_t preadNoInt(int fd, void* buf, size_t count, off_t offset) {
 }
 
 ssize_t readvNoInt(int fd, const iovec* iov, int count) {
-  return wrapNoInt(writev, fd, iov, count);
+  return wrapNoInt(readv, fd, iov, count);
 }
 
 ssize_t writeNoInt(int fd, const void* buf, size_t count) {
@@ -132,20 +130,16 @@ ssize_t readvFull(int fd, iovec* iov, int count) {
   return wrapvFull(readv, fd, iov, count);
 }
 
-#if FOLLY_HAVE_PREADV
 ssize_t preadvFull(int fd, iovec* iov, int count, off_t offset) {
   return wrapvFull(preadv, fd, iov, count, offset);
 }
-#endif
 
 ssize_t writevFull(int fd, iovec* iov, int count) {
   return wrapvFull(writev, fd, iov, count);
 }
 
-#if FOLLY_HAVE_PWRITEV
 ssize_t pwritevFull(int fd, iovec* iov, int count, off_t offset) {
   return wrapvFull(pwritev, fd, iov, count, offset);
 }
-#endif
 
 }  // namespaces

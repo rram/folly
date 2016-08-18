@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,12 +21,12 @@
 #include <stdio.h>
 #include <pthread.h>
 
-#include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <folly/Benchmark.h>
+#include <folly/ProducerConsumerQueue.h>
+#include <folly/portability/GFlags.h>
 #include <folly/stats/Histogram.h>
 #include <folly/stats/Histogram-defs.h>
-#include <folly/ProducerConsumerQueue.h>
+#include <glog/logging.h>
 
 namespace {
 
@@ -98,15 +98,14 @@ struct LatencyTest {
     }
 
   void computeTimeCost() {
-    int iterations = 1000;
     timespec start, end;
     clock_gettime(CLOCK_REALTIME, &start);
-    for (int i = 0; i < iterations; ++i) {
+    for (int i = 0; i < iters_; ++i) {
       timespec tv;
       clock_gettime(CLOCK_REALTIME, &tv);
     }
     clock_gettime(CLOCK_REALTIME, &end);
-    time_cost_ = 2 * detail::timespecDiff(end, start) / iterations;
+    time_cost_ = 2 * detail::timespecDiff(end, start) / iters_;
   }
 
   void producer() {
@@ -204,7 +203,7 @@ void BM_ProducerConsumerAffinity(int iters, int size) {
   delete test;
 }
 
-void BM_ProducerConsumerLatency(int iters, int size) {
+void BM_ProducerConsumerLatency(int /* iters */, int size) {
   BenchmarkSuspender susp;
   CHECK_GT(size, 0);
   LatencyTest<LatencyQueueType> *test =

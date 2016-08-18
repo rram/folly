@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,20 +14,19 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_FILEUTIL_H_
-#define FOLLY_FILEUTIL_H_
+#pragma once
 
 #include <folly/Conv.h>
 #include <folly/Portability.h>
 #include <folly/ScopeGuard.h>
+#include <folly/portability/Fcntl.h>
+#include <folly/portability/SysUio.h>
+#include <folly/portability/Unistd.h>
 
 #include <cassert>
 #include <limits>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <sys/uio.h>
-#include <fcntl.h>
-#include <unistd.h>
 
 namespace folly {
 
@@ -81,9 +80,7 @@ ssize_t writevNoInt(int fd, const iovec* iov, int count);
 ssize_t readFull(int fd, void* buf, size_t n);
 ssize_t preadFull(int fd, void* buf, size_t n, off_t offset);
 ssize_t readvFull(int fd, iovec* iov, int count);
-#if FOLLY_HAVE_PREADV
 ssize_t preadvFull(int fd, iovec* iov, int count, off_t offset);
-#endif
 
 /**
  * Similar to readFull and preadFull above, wrappers around write() and
@@ -102,9 +99,7 @@ ssize_t preadvFull(int fd, iovec* iov, int count, off_t offset);
 ssize_t writeFull(int fd, const void* buf, size_t n);
 ssize_t pwriteFull(int fd, const void* buf, size_t n, off_t offset);
 ssize_t writevFull(int fd, iovec* iov, int count);
-#if FOLLY_HAVE_PWRITEV
 ssize_t pwritevFull(int fd, iovec* iov, int count, off_t offset);
-#endif
 
 /**
  * Read entire file (if num_bytes is defaulted) or no more than
@@ -117,21 +112,17 @@ ssize_t pwritevFull(int fd, iovec* iov, int count, off_t offset);
  * errno will be set appropriately by the failing system primitive.
  */
 template <class Container>
-bool readFile(const char* file_name, Container& out,
-              size_t num_bytes = std::numeric_limits<size_t>::max()) {
+bool readFile(
+    int fd,
+    Container& out,
+    size_t num_bytes = std::numeric_limits<size_t>::max()) {
   static_assert(sizeof(out[0]) == 1,
                 "readFile: only containers with byte-sized elements accepted");
-  assert(file_name);
-
-  const auto fd = openNoInt(file_name, O_RDONLY);
-  if (fd == -1) return false;
 
   size_t soFar = 0; // amount of bytes successfully read
   SCOPE_EXIT {
-    assert(out.size() >= soFar); // resize better doesn't throw
+    DCHECK(out.size() >= soFar); // resize better doesn't throw
     out.resize(soFar);
-    // Ignore errors when closing the file
-    closeNoInt(fd);
   };
 
   // Obtain file size:
@@ -167,6 +158,29 @@ bool readFile(const char* file_name, Container& out,
 }
 
 /**
+ * Same as above, but takes in a file name instead of fd
+ */
+template <class Container>
+bool readFile(
+    const char* file_name,
+    Container& out,
+    size_t num_bytes = std::numeric_limits<size_t>::max()) {
+  DCHECK(file_name);
+
+  const auto fd = openNoInt(file_name, O_RDONLY);
+  if (fd == -1) {
+    return false;
+  }
+
+  SCOPE_EXIT {
+    // Ignore errors when closing the file
+    closeNoInt(fd);
+  };
+
+  return readFile(fd, out, num_bytes);
+}
+
+/**
  * Writes container to file. The container is assumed to be
  * contiguous, with element size equal to 1, and offering STL-like
  * methods empty(), size(), and indexed access
@@ -193,5 +207,3 @@ bool writeFile(const Container& data, const char* filename,
 }
 
 }  // namespaces
-
-#endif /* FOLLY_FILEUTIL_H_ */

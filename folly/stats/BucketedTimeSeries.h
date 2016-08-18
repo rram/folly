@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_STATS_BUCKETEDTIMESERIES_H_
-#define FOLLY_STATS_BUCKETEDTIMESERIES_H_
+#pragma once
 
 #include <chrono>
 #include <vector>
@@ -406,5 +405,3 @@ class BucketedTimeSeries {
 };
 
 } // folly
-
-#endif // FOLLY_STATS_BUCKETEDTIMESERIES_H_

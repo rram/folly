@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,6 @@
 
 #include <folly/Format.h>
 
-#include <gflags/gflags.h>
 #include <gtest/gtest.h>
 
 #include <string>
@@ -201,7 +200,6 @@ TEST(Format, Simple) {
 }
 
 TEST(Format, Float) {
-  double d = 1;
   EXPECT_EQ("1", sformat("{}", 1.0));
   EXPECT_EQ("0.1", sformat("{}", 0.1));
   EXPECT_EQ("0.01", sformat("{}", 0.01));
@@ -454,8 +452,7 @@ TEST(Format, BogusFormatString) {
 
   // This one fails in detail::enforceWhitespace(), which throws
   // std::range_error
-  EXPECT_THROW_STR(sformat("{0[test}"), std::range_error,
-                   "Non-whitespace: [");
+  EXPECT_THROW_STR(sformat("{0[test}"), std::range_error, "Non-whitespace");
 }
 
 template <bool containerMode, class... Args>
@@ -508,10 +505,4 @@ TEST(Format, Extending) {
                        texsformat("a {}", "formatter"),
                        "another formatter"),
             "Extending {a {formatter}} in {another formatter}");
-}
-
-int main(int argc, char *argv[]) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
 }

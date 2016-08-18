@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,15 +16,14 @@
 
 #include <folly/Format.h>
 
+#include <glog/logging.h>
+#include <gtest/gtest.h>
+
 #include <folly/FBVector.h>
 #include <folly/FileUtil.h>
 #include <folly/dynamic.h>
 #include <folly/json.h>
 #include <folly/small_vector.h>
-
-#include <glog/logging.h>
-#include <gflags/gflags.h>
-#include <gtest/gtest.h>
 
 using namespace folly;
 

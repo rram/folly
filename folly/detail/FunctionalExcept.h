@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_DETAIL_FUNCTIONAL_EXCEPT_H
-#define FOLLY_DETAIL_FUNCTIONAL_EXCEPT_H
+#pragma once
 
 #include <folly/Portability.h>
 
@@ -23,18 +22,16 @@
 
 FOLLY_NAMESPACE_STD_BEGIN
 
-FOLLY_NORETURN void __throw_length_error(const char* msg);
-FOLLY_NORETURN void __throw_logic_error(const char* msg);
-FOLLY_NORETURN void __throw_out_of_range(const char* msg);
+[[noreturn]] void __throw_length_error(const char* msg);
+[[noreturn]] void __throw_logic_error(const char* msg);
+[[noreturn]] void __throw_out_of_range(const char* msg);
 
 #ifdef _MSC_VER
-FOLLY_NORETURN void __throw_bad_alloc();
+[[noreturn]] void __throw_bad_alloc();
 #endif
 
 FOLLY_NAMESPACE_STD_END
 
 #else
 #error This file should never be included if FOLLY_HAVE_BITS_FUNCTEXCEPT_H is set
-#endif
-
 #endif

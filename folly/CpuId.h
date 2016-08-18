@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_CPUID_H_
-#define FOLLY_CPUID_H_
+#pragma once
 
 #include <cstdint>
 #include <folly/Portability.h>
+
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 namespace folly {
 
@@ -43,6 +46,38 @@ class CpuId {
       __cpuidex(static_cast<int*>(reg), 7, 0);
       f7b_ = reg[1];
       f7c_ = reg[2];
+    }
+#elif defined(__i386__) && defined(__PIC__) && !defined(__clang__) && \
+    defined(__GNUC__)
+    // The following block like the normal cpuid branch below, but gcc
+    // reserves ebx for use of it's pic register so we must specially
+    // handle the save and restore to avoid clobbering the register
+    uint32_t n;
+    __asm__(
+        "pushl %%ebx\n\t"
+        "cpuid\n\t"
+        "popl %%ebx\n\t"
+        : "=a"(n)
+        : "a"(0)
+        : "edx", "ecx");
+    if (n >= 1) {
+      __asm__(
+          "pushl %%ebx\n\t"
+          "cpuid\n\t"
+          "popl %%ebx\n\t"
+          : "=c"(f1c_), "=d"(f1d_)
+          : "a"(1)
+          :);
+    }
+    if (n >= 7) {
+      __asm__(
+          "pushl %%ebx\n\t"
+          "cpuid\n\t"
+          "movl %%ebx, %%eax\n\r"
+          "popl %%ebx"
+          : "=a"(f7b_), "=c"(f7c_)
+          : "a"(7), "c"(0)
+          : "edx");
     }
 #elif FOLLY_X64 || defined(__i386__)
     uint32_t n;
@@ -164,5 +199,3 @@ class CpuId {
 };
 
 }  // namespace folly
-
-#endif /* FOLLY_CPUID_H_ */

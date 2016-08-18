@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,14 @@ namespace folly {
 namespace exception_tracer {
 
 std::ostream& operator<<(std::ostream& out, const ExceptionInfo& info) {
+  printExceptionInfo(out, info, SymbolizePrinter::COLOR_IF_TTY);
+  return out;
+}
+
+void printExceptionInfo(
+    std::ostream& out,
+    const ExceptionInfo& info,
+    int options) {
   out << "Exception type: ";
   if (info.type) {
     out << folly::demangle(*info.type);
@@ -55,12 +63,12 @@ std::ostream& operator<<(std::ostream& out, const ExceptionInfo& info) {
       << ")\n";
   try {
     size_t frameCount = info.frames.size();
-    // Skip our own internal frames
-    static constexpr size_t skip = 3;
 
-    if (frameCount > skip) {
-      auto addresses = info.frames.data() + skip;
-      frameCount -= skip;
+    // Skip our own internal frames
+    static constexpr size_t kInternalFramesNumber = 3;
+    if (frameCount > kInternalFramesNumber) {
+      auto addresses = info.frames.data() + kInternalFramesNumber;
+      frameCount -= kInternalFramesNumber;
 
       std::vector<SymbolizedFrame> frames;
       frames.resize(frameCount);
@@ -68,7 +76,7 @@ std::ostream& operator<<(std::ostream& out, const ExceptionInfo& info) {
       Symbolizer symbolizer;
       symbolizer.symbolize(addresses, frames.data(), frameCount);
 
-      OStreamSymbolizePrinter osp(out, SymbolizePrinter::COLOR_IF_TTY);
+      OStreamSymbolizePrinter osp(out, options);
       osp.println(addresses, frames.data(), frameCount);
     }
   } catch (const std::exception& e) {
@@ -76,7 +84,6 @@ std::ostream& operator<<(std::ostream& out, const ExceptionInfo& info) {
   } catch (...) {
     out << "\n !!! caught unexpected exception\n";
   }
-  return out;
 }
 
 namespace {

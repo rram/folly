@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,12 +42,14 @@ class MockAsyncSSLSocket : public AsyncSSLSocket {
   MOCK_CONST_METHOD0(good, bool());
   MOCK_CONST_METHOD0(readable, bool());
   MOCK_CONST_METHOD0(hangup, bool());
-  MOCK_CONST_METHOD2(
-   getSelectedNextProtocol,
-   void(const unsigned char**, unsigned*));
-  MOCK_CONST_METHOD2(
-   getSelectedNextProtocolNoThrow,
-   bool(const unsigned char**, unsigned*));
+  MOCK_CONST_METHOD3(getSelectedNextProtocol,
+                     void(const unsigned char**,
+                          unsigned*,
+                          SSLContext::NextProtocolType*));
+  MOCK_CONST_METHOD3(getSelectedNextProtocolNoThrow,
+                     bool(const unsigned char**,
+                          unsigned*,
+                          SSLContext::NextProtocolType*));
   MOCK_METHOD1(setPeek, void(bool));
   MOCK_METHOD1(setReadCB, void(ReadCallback*));
 

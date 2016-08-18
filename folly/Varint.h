@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_VARINT_H_
-#define FOLLY_VARINT_H_
+#pragma once
 
 #include <type_traits>
 #include <folly/Conv.h>
@@ -72,7 +71,8 @@ uint64_t decodeVarint(Range<T*>& data);
 inline uint64_t encodeZigZag(int64_t val) {
   // Bit-twiddling magic stolen from the Google protocol buffer document;
   // val >> 63 is an arithmetic shift because val is signed
-  return static_cast<uint64_t>((val << 1) ^ (val >> 63));
+  auto uval = static_cast<uint64_t>(val);
+  return static_cast<uint64_t>((uval << 1) ^ (val >> 63));
 }
 
 inline int64_t decodeZigZag(uint64_t val) {
@@ -138,5 +138,3 @@ inline uint64_t decodeVarint(Range<T*>& data) {
 }
 
 }  // namespaces
-
-#endif /* FOLLY_VARINT_H_ */

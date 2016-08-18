@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #endif
 
 #include <array>
+#include <cinttypes>
 #include <deque>
 #include <map>
 #include <unordered_map>
@@ -27,6 +28,7 @@
 #include <folly/Exception.h>
 #include <folly/FormatTraits.h>
 #include <folly/Traits.h>
+#include <folly/portability/Windows.h>
 
 // Ignore -Wformat-nonliteral warnings within this file
 #pragma GCC diagnostic push
@@ -442,7 +444,7 @@ class FormatValue<
     char sign;
     if (std::is_signed<T>::value) {
       if (folly::is_negative(val_)) {
-        uval = static_cast<UT>(-val_);
+        uval = -static_cast<UT>(val_);
         sign = '-';
       } else {
         uval = static_cast<UT>(val_);
@@ -501,6 +503,9 @@ class FormatValue<
         valBufBegin,
         (int)((valBuf + valBufSize) - valBufBegin)
       );
+#elif defined(__ANDROID__)
+      int len = snprintf(valBufBegin, (valBuf + valBufSize) - valBufBegin,
+                         "%" PRIuMAX, static_cast<uintmax_t>(uval));
 #else
       int len = snprintf(valBufBegin, (valBuf + valBufSize) - valBufBegin,
                          "%'ju", static_cast<uintmax_t>(uval));
@@ -767,7 +772,9 @@ template <class T, class = void>
 class TryFormatValue {
  public:
   template <class FormatCallback>
-  static void formatOrFail(T& value, FormatArg& arg, FormatCallback& cb) {
+  static void formatOrFail(T& /* value */,
+                           FormatArg& arg,
+                           FormatCallback& /* cb */) {
     arg.error("No formatter available for this type");
   }
 };
@@ -1043,8 +1050,8 @@ class FormatValue<std::tuple<Args...>> {
   static constexpr size_t valueCount = std::tuple_size<Tuple>::value;
 
   template <size_t K, class Callback>
-  typename std::enable_if<K == valueCount>::type
-  doFormatFrom(size_t i, FormatArg& arg, Callback& cb) const {
+  typename std::enable_if<K == valueCount>::type doFormatFrom(
+      size_t i, FormatArg& arg, Callback& /* cb */) const {
     arg.enforce("tuple index out of range, max=", i);
   }
 

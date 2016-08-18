@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,16 +21,16 @@
 #include <utility>
 
 #include <folly/Format.h>
+#include <folly/portability/GFlags.h>
+#include <folly/portability/SysMman.h>
 
 #ifdef __linux__
 #include <folly/experimental/io/HugePages.h>
 #endif
 
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/types.h>
 #include <system_error>
-#include <gflags/gflags.h>
 
 DEFINE_int64(mlock_chunk_size, 1 << 20,  // 1MB
              "Maximum bytes to mlock/munlock/munmap at once "
@@ -211,6 +211,15 @@ off_t memOpChunkSize(off_t length, off_t pageSize) {
 bool memOpInChunks(std::function<int(void*, size_t)> op,
                    void* mem, size_t bufSize, off_t pageSize,
                    size_t& amountSucceeded) {
+#ifdef _MSC_VER
+  // MSVC doesn't have this problem, and calling munmap many times
+  // with the same address is a bad idea with the windows implementation.
+  int ret = op(mem, bufSize);
+  if (ret == 0) {
+    amountSucceeded = bufSize;
+  }
+  return ret == 0;
+#else
   // unmap/mlock/munlock take a kernel semaphore and block other threads from
   // doing other memory operations. If the size of the buffer is big the
   // semaphore can be down for seconds (for benchmarks see
@@ -232,6 +241,7 @@ bool memOpInChunks(std::function<int(void*, size_t)> op,
   }
 
   return true;
+#endif
 }
 
 }  // anonymous namespace
@@ -253,11 +263,13 @@ bool MemoryMapping::mlock(LockMode lock) {
     PLOG(FATAL) << msg;
   }
 
+#ifndef _MSC_VER
   // only part of the buffer was mlocked, unlock it back
   if (!memOpInChunks(::munlock, mapStart_, amountSucceeded, options_.pageSize,
                      amountSucceeded)) {
     PLOG(WARNING) << "munlock()";
   }
+#endif
 
   return false;
 }

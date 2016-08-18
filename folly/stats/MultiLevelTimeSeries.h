@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,15 +14,16 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_STATS_MULTILEVELTIMESERIES_H_
-#define FOLLY_STATS_MULTILEVELTIMESERIES_H_
+#pragma once
 
 #include <chrono>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
-#include <glog/logging.h>
+#include <folly/String.h>
 #include <folly/stats/BucketedTimeSeries.h>
+#include <glog/logging.h>
 
 namespace folly {
 
@@ -69,6 +70,10 @@ class MultiLevelTimeSeries {
   MultiLevelTimeSeries(size_t numBuckets,
                        size_t numLevels,
                        const TimeType levelDurations[]);
+
+  MultiLevelTimeSeries(
+      size_t numBuckets,
+      std::initializer_list<TimeType> durations);
 
   /*
    * Return the number of buckets used to track time series at each level.
@@ -124,6 +129,26 @@ class MultiLevelTimeSeries {
   }
 
   /*
+   * Get the BucketedTimeSeries backing the specified level.
+   *
+   * Note: you should generally call update() or flush() before accessing the
+   * data. Otherwise you may be reading stale data if update() or flush() has
+   * not been called recently.
+   */
+  const Level& getLevelByDuration(TimeType duration) const {
+    // since the number of levels is expected to be small (less than 5 in most
+    // cases), a simple linear scan would be efficient and is intentionally
+    // chosen here over other alternatives for lookup.
+    for (const auto& level : levels_) {
+      if (level.duration() == duration) {
+        return level;
+      }
+    }
+    throw std::out_of_range(folly::to<std::string>(
+        "No level of duration ", duration.count(), " found"));
+  }
+
+  /*
    * Return the sum of all the data points currently tracked at this level.
    *
    * Note: you should generally call update() or flush() before accessing the
@@ -159,7 +184,7 @@ class MultiLevelTimeSeries {
    * not been called recently.
    */
   template <typename ReturnType=double, typename Interval=TimeType>
-  ValueType rate(int level) const {
+  ReturnType rate(int level) const {
     return getLevel(level).template rate<ReturnType, Interval>();
   }
 
@@ -184,6 +209,82 @@ class MultiLevelTimeSeries {
   template <typename ReturnType=double, typename Interval=TimeType>
   ReturnType countRate(int level) const {
     return getLevel(level).template countRate<ReturnType, Interval>();
+  }
+
+  /*
+   * Return the sum of all the data points currently tracked at this level.
+   *
+   * This method is identical to sum(int level) above but takes in the
+   * duration that the user is interested in querying as the parameter.
+   *
+   * Note: you should generally call update() or flush() before accessing the
+   * data. Otherwise you may be reading stale data if update() or flush() has
+   * not been called recently.
+   */
+  ValueType sum(TimeType duration) const {
+    return getLevelByDuration(duration).sum();
+  }
+
+  /*
+   * Return the average (sum / count) of all the data points currently tracked
+   * at this level.
+   *
+   * This method is identical to avg(int level) above but takes in the
+   * duration that the user is interested in querying as the parameter.
+   *
+   * Note: you should generally call update() or flush() before accessing the
+   * data. Otherwise you may be reading stale data if update() or flush() has
+   * not been called recently.
+   */
+  template <typename ReturnType = double>
+  ReturnType avg(TimeType duration) const {
+    return getLevelByDuration(duration).template avg<ReturnType>();
+  }
+
+  /*
+   * Return the rate (sum divided by elaspsed time) of the all data points
+   * currently tracked at this level.
+   *
+   * This method is identical to rate(int level) above but takes in the
+   * duration that the user is interested in querying as the parameter.
+   *
+   * Note: you should generally call update() or flush() before accessing the
+   * data. Otherwise you may be reading stale data if update() or flush() has
+   * not been called recently.
+   */
+  template <typename ReturnType = double, typename Interval = TimeType>
+  ReturnType rate(TimeType duration) const {
+    return getLevelByDuration(duration).template rate<ReturnType, Interval>();
+  }
+
+  /*
+   * Return the number of data points currently tracked at this level.
+   *
+   * This method is identical to count(int level) above but takes in the
+   * duration that the user is interested in querying as the parameter.
+   *
+   * Note: you should generally call update() or flush() before accessing the
+   * data. Otherwise you may be reading stale data if update() or flush() has
+   * not been called recently.
+   */
+  int64_t count(TimeType duration) const {
+    return getLevelByDuration(duration).count();
+  }
+
+  /*
+   * Return the count divided by the elapsed time tracked at this level.
+   *
+   * This method is identical to countRate(int level) above but takes in the
+   * duration that the user is interested in querying as the parameter.
+   *
+   * Note: you should generally call update() or flush() before accessing the
+   * data. Otherwise you may be reading stale data if update() or flush() has
+   * not been called recently.
+   */
+  template <typename ReturnType = double, typename Interval = TimeType>
+  ReturnType countRate(TimeType duration) const {
+    return getLevelByDuration(duration)
+        .template countRate<ReturnType, Interval>();
   }
 
   /*
@@ -311,5 +412,3 @@ class MultiLevelTimeSeries {
 };
 
 } // folly
-
-#endif // FOLLY_STATS_MULTILEVELTIMESERIES_H_

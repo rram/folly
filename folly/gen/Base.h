@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef FOLLY_GEN_BASE_H
-#define FOLLY_GEN_BASE_H
+#pragma once
+#define FOLLY_GEN_BASE_H_
 
 #include <algorithm>
 #include <functional>
@@ -272,13 +272,9 @@ struct FBounded;
  */
 template<class Container>
 struct ValueTypeOfRange {
- private:
-  static Container container_;
  public:
-  typedef decltype(*std::begin(container_))
-    RefType;
-  typedef typename std::decay<decltype(*std::begin(container_))>::type
-    StorageType;
+  using RefType = decltype(*std::begin(std::declval<Container&>()));
+  using StorageType = typename std::decay<RefType>::type;
 };
 
 
@@ -830,5 +826,3 @@ UnwrapOr unwrapOr(Fallback&& fallback) {
 }} // folly::gen
 
 #include <folly/gen/Base-inl.h>
-
-#endif // FOLLY_GEN_BASE_H

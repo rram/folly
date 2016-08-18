@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,9 +24,6 @@
 #include <sys/prctl.h>
 #endif
 #include <fcntl.h>
-#include <poll.h>
-
-#include <unistd.h>
 
 #include <array>
 #include <algorithm>
@@ -42,8 +39,9 @@
 #include <folly/ScopeGuard.h>
 #include <folly/String.h>
 #include <folly/io/Cursor.h>
-
-extern char** environ;
+#include <folly/portability/Environment.h>
+#include <folly/portability/Sockets.h>
+#include <folly/portability/Unistd.h>
 
 constexpr int kExecFailure = 127;
 constexpr int kChildFailure = 126;
@@ -163,13 +161,13 @@ Subprocess::Options& Subprocess::Options::fd(int fd, int action) {
   return *this;
 }
 
+Subprocess::Subprocess() {}
+
 Subprocess::Subprocess(
     const std::vector<std::string>& argv,
     const Options& options,
     const char* executable,
-    const std::vector<std::string>* env)
-  : pid_(-1),
-    returnCode_(RV_NOT_STARTED) {
+    const std::vector<std::string>* env) {
   if (argv.empty()) {
     throw std::invalid_argument("argv must not be empty");
   }
@@ -180,9 +178,7 @@ Subprocess::Subprocess(
 Subprocess::Subprocess(
     const std::string& cmd,
     const Options& options,
-    const std::vector<std::string>* env)
-  : pid_(-1),
-    returnCode_(RV_NOT_STARTED) {
+    const std::vector<std::string>* env) {
   if (options.usePath_) {
     throw std::invalid_argument("usePath() not allowed when running in shell");
   }
@@ -211,8 +207,7 @@ struct ChildErrorInfo {
   int errnoValue;
 };
 
-FOLLY_NORETURN void childError(int errFd, int errCode, int errnoValue);
-void childError(int errFd, int errCode, int errnoValue) {
+[[noreturn]] void childError(int errFd, int errCode, int errnoValue) {
   ChildErrorInfo info = {errCode, errnoValue};
   // Write the error information over the pipe to our parent process.
   // We can't really do anything else if this write call fails.
@@ -481,7 +476,9 @@ int Subprocess::prepareChild(const Options& options,
 #if __linux__
   // Opt to receive signal on parent death, if requested
   if (options.parentDeathSignal_ != 0) {
-    if (prctl(PR_SET_PDEATHSIG, options.parentDeathSignal_, 0, 0, 0) == -1) {
+    const auto parentDeathSignal =
+        static_cast<unsigned long>(options.parentDeathSignal_);
+    if (prctl(PR_SET_PDEATHSIG, parentDeathSignal, 0, 0, 0) == -1) {
       return errno;
     }
   }
@@ -490,6 +487,13 @@ int Subprocess::prepareChild(const Options& options,
   if (options.processGroupLeader_) {
     if (setpgrp() == -1) {
       return errno;
+    }
+  }
+
+  // The user callback comes last, so that the child is otherwise all set up.
+  if (options.dangerousPostForkPreExecCallback_) {
+    if (int error = (*options.dangerousPostForkPreExecCallback_)()) {
+      return error;
     }
   }
 
@@ -599,21 +603,23 @@ pid_t Subprocess::pid() const {
 
 namespace {
 
-std::pair<const uint8_t*, size_t> queueFront(const IOBufQueue& queue) {
+ByteRange queueFront(const IOBufQueue& queue) {
   auto* p = queue.front();
-  if (!p) return std::make_pair(nullptr, 0);
-  return io::Cursor(p).peek();
+  if (!p) {
+    return ByteRange{};
+  }
+  return io::Cursor(p).peekBytes();
 }
 
 // fd write
 bool handleWrite(int fd, IOBufQueue& queue) {
   for (;;) {
-    auto p = queueFront(queue);
-    if (p.second == 0) {
+    auto b = queueFront(queue);
+    if (b.empty()) {
       return true;  // EOF
     }
 
-    ssize_t n = writeNoInt(fd, p.first, p.second);
+    ssize_t n = writeNoInt(fd, b.data(), b.size());
     if (n == -1 && errno == EAGAIN) {
       return false;
     }
@@ -826,7 +832,8 @@ std::vector<Subprocess::ChildPipe> Subprocess::takeOwnershipOfPipes() {
   for (auto& p : pipes_) {
     pipes.emplace_back(p.childFd, std::move(p.pipe));
   }
-  pipes_.clear();
+  // release memory
+  std::vector<Pipe>().swap(pipes_);
   return pipes;
 }
 

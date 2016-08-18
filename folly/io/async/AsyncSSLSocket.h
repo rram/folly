@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,36 +16,25 @@
 
 #pragma once
 
-#include <arpa/inet.h>
 #include <iomanip>
-#include <openssl/ssl.h>
 
 #include <folly/Optional.h>
 #include <folly/String.h>
 #include <folly/io/async/AsyncSocket.h>
-#include <folly/io/async/SSLContext.h>
 #include <folly/io/async/AsyncTimeout.h>
+#include <folly/io/async/SSLContext.h>
 #include <folly/io/async/TimeoutManager.h>
+#include <folly/io/async/ssl/OpenSSLPtrTypes.h>
+#include <folly/io/async/ssl/OpenSSLUtils.h>
+#include <folly/io/async/ssl/SSLErrors.h>
+#include <folly/io/async/ssl/TLSDefinitions.h>
 
 #include <folly/Bits.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/Cursor.h>
-
-using folly::io::Cursor;
-using std::unique_ptr;
+#include <folly/portability/Sockets.h>
 
 namespace folly {
-
-class SSLException: public folly::AsyncSocketException {
- public:
-  SSLException(int sslError, int errno_copy);
-
-  int getSSLError() const { return error_; }
-
- protected:
-  int error_;
-  char msg_[256];
-};
 
 /**
  * A class for performing asynchronous I/O on an SSL connection.
@@ -80,6 +69,7 @@ class SSLException: public folly::AsyncSocketException {
 class AsyncSSLSocket : public virtual AsyncSocket {
  public:
   typedef std::unique_ptr<AsyncSSLSocket, Destructor> UniquePtr;
+  using X509_deleter = folly::static_function_deleter<X509, &X509_free>;
 
   class HandshakeCB {
    public:
@@ -144,18 +134,6 @@ class AsyncSSLSocket : public virtual AsyncSocket {
 
    private:
     AsyncSSLSocket* sslSocket_;
-  };
-
-
-  /**
-   * These are passed to the application via errno, packed in an SSL err which
-   * are outside the valid errno range.  The values are chosen to be unique
-   * against values in ssl.h
-   */
-  enum SSLError {
-    SSL_CLIENT_RENEGOTIATION_ATTEMPT = 900,
-    SSL_INVALID_RENEGOTIATION = 901,
-    SSL_EARLY_WRITE = 902
   };
 
   /**
@@ -275,6 +253,9 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   virtual void shutdownWriteNow() override;
   virtual bool good() const override;
   virtual bool connecting() const override;
+  virtual std::string getApplicationProtocol() noexcept override;
+
+  virtual std::string getSecurityProtocol() const override { return "TLS"; }
 
   bool isEorTrackingEnabled() const override;
   virtual void setEorTracking(bool track) override;
@@ -322,10 +303,10 @@ class AsyncSSLSocket : public virtual AsyncSocket {
 
   /**
    * Initiate an SSL connection on the socket
-   * THe callback will be invoked and uninstalled when an SSL connection
+   * The callback will be invoked and uninstalled when an SSL connection
    * has been establshed on the underlying socket.
-   * The verification option verifyPeer is applied if its passed explicitly.
-   * If its not, the options in SSLContext set on the underying SSLContext
+   * The verification option verifyPeer is applied if it's passed explicitly.
+   * If it's not, the options in SSLContext set on the underlying SSLContext
    * are applied.
    *
    * @param callback callback object to invoke on success/failure
@@ -346,7 +327,7 @@ class AsyncSSLSocket : public virtual AsyncSocket {
     STATE_UNENCRYPTED,
     STATE_ACCEPTING,
     STATE_CACHE_LOOKUP,
-    STATE_RSA_ASYNC_PENDING,
+    STATE_ASYNC_PENDING,
     STATE_CONNECTING,
     STATE_ESTABLISHED,
     STATE_REMOTE_CLOSED, /// remote end closed; we can still write
@@ -366,6 +347,11 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   SSL_SESSION *getSSLSession();
 
   /**
+   * Get a handle to the SSL struct.
+   */
+  const SSL* getSSL() const;
+
+  /**
    * Set the SSL session to be used during sslConn.  AsyncSSLSocket will
    * hold a reference to the session until it is destroyed or released by the
    * underlying SSL structure.
@@ -377,7 +363,8 @@ class AsyncSSLSocket : public virtual AsyncSocket {
 
   /**
    * Get the name of the protocol selected by the client during
-   * Next Protocol Negotiation (NPN)
+   * Next Protocol Negotiation (NPN) or Application Layer Protocol Negotiation
+   * (ALPN)
    *
    * Throw an exception if openssl does not support NPN
    *
@@ -387,13 +374,17 @@ class AsyncSSLSocket : public virtual AsyncSocket {
    *                       Note: the AsyncSSLSocket retains ownership
    *                       of this string.
    * @param protoNameLen   Length of the name.
+   * @param protoType      Whether this was an NPN or ALPN negotiation
    */
-  virtual void getSelectedNextProtocol(const unsigned char** protoName,
-      unsigned* protoLen) const;
+  virtual void getSelectedNextProtocol(
+      const unsigned char** protoName,
+      unsigned* protoLen,
+      SSLContext::NextProtocolType* protoType = nullptr) const;
 
   /**
    * Get the name of the protocol selected by the client during
-   * Next Protocol Negotiation (NPN)
+   * Next Protocol Negotiation (NPN) or Application Layer Protocol Negotiation
+   * (ALPN)
    *
    * @param protoName      Name of the protocol (not guaranteed to be
    *                       null terminated); will be set to nullptr if
@@ -401,16 +392,19 @@ class AsyncSSLSocket : public virtual AsyncSocket {
    *                       Note: the AsyncSSLSocket retains ownership
    *                       of this string.
    * @param protoNameLen   Length of the name.
+   * @param protoType      Whether this was an NPN or ALPN negotiation
    * @return false if openssl does not support NPN
    */
-  virtual bool getSelectedNextProtocolNoThrow(const unsigned char** protoName,
-      unsigned* protoLen) const;
+  virtual bool getSelectedNextProtocolNoThrow(
+      const unsigned char** protoName,
+      unsigned* protoLen,
+      SSLContext::NextProtocolType* protoType = nullptr) const;
 
   /**
    * Determine if the session specified during setSSLSession was reused
    * or if the server rejected it and issued a new session.
    */
-  bool getSSLSessionReused() const;
+  virtual bool getSSLSessionReused() const;
 
   /**
    * true if the session was resumed using session ID
@@ -426,7 +420,7 @@ class AsyncSSLSocket : public virtual AsyncSocket {
    * Returns the cipher used or the constant value "NONE" when no SSL session
    * has been established.
    */
-  const char *getNegotiatedCipherName() const;
+  virtual const char* getNegotiatedCipherName() const;
 
   /**
    * Get the server name for this SSL connection.
@@ -453,29 +447,20 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   int getSSLVersion() const;
 
   /**
+   * Get the signature algorithm used in the cert that is used for this
+   * connection.
+   */
+  const char *getSSLCertSigAlgName() const;
+
+  /**
    * Get the certificate size used for this SSL connection.
    */
   int getSSLCertSize() const;
 
-  /* Get the number of bytes read from the wire (including protocol
-   * overhead). Returns 0 once the connection has been closed.
+  /**
+   * Get the certificate used for this SSL connection. May be null
    */
-  unsigned long getBytesRead() const {
-    if (ssl_ != nullptr) {
-      return BIO_number_read(SSL_get_rbio(ssl_));
-    }
-    return 0;
-  }
-
-  /* Get the number of bytes written to the wire (including protocol
-   * overhead).  Returns 0 once the connection has been closed.
-   */
-  unsigned long getBytesWritten() const {
-    if (ssl_ != nullptr) {
-      return BIO_number_written(SSL_get_wbio(ssl_));
-    }
-    return 0;
-  }
+  virtual const X509* getSelfCert() const override;
 
   virtual void attachEventBase(EventBase* eventBase) override {
     AsyncSocket::attachEventBase(eventBase);
@@ -485,6 +470,10 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   virtual void detachEventBase() override {
     AsyncSocket::detachEventBase();
     handshakeTimeout_.detachEventBase();
+  }
+
+  virtual bool isDetachable() const override {
+    return AsyncSocket::isDetachable() && !handshakeTimeout_.isScheduled();
   }
 
   virtual void attachTimeoutManager(TimeoutManager* manager) {
@@ -540,7 +529,9 @@ class AsyncSSLSocket : public virtual AsyncSocket {
    * Get the list of supported ciphers sent by the client in the client's
    * preference order.
    */
-  void getSSLClientCiphers(std::string& clientCiphers) {
+  void getSSLClientCiphers(
+      std::string& clientCiphers,
+      bool convertToString = true) const {
     std::stringstream ciphersStream;
     std::string cipherName;
 
@@ -552,22 +543,25 @@ class AsyncSSLSocket : public virtual AsyncSocket {
 
     for (auto originalCipherCode : clientHelloInfo_->clientHelloCipherSuites_)
     {
-      // OpenSSL expects code as a big endian char array
-      auto cipherCode = htons(originalCipherCode);
+      const SSL_CIPHER* cipher = nullptr;
+      if (convertToString) {
+        // OpenSSL expects code as a big endian char array
+        auto cipherCode = htons(originalCipherCode);
 
 #if defined(SSL_OP_NO_TLSv1_2)
-      const SSL_CIPHER* cipher =
-          TLSv1_2_method()->get_cipher_by_char((unsigned char*)&cipherCode);
+        cipher =
+            TLSv1_2_method()->get_cipher_by_char((unsigned char*)&cipherCode);
 #elif defined(SSL_OP_NO_TLSv1_1)
-      const SSL_CIPHER* cipher =
-          TLSv1_1_method()->get_cipher_by_char((unsigned char*)&cipherCode);
+        cipher =
+            TLSv1_1_method()->get_cipher_by_char((unsigned char*)&cipherCode);
 #elif defined(SSL_OP_NO_TLSv1)
-      const SSL_CIPHER* cipher =
-          TLSv1_method()->get_cipher_by_char((unsigned char*)&cipherCode);
+        cipher =
+            TLSv1_method()->get_cipher_by_char((unsigned char*)&cipherCode);
 #else
-      const SSL_CIPHER* cipher =
-          SSLv3_method()->get_cipher_by_char((unsigned char*)&cipherCode);
+        cipher =
+            SSLv3_method()->get_cipher_by_char((unsigned char*)&cipherCode);
 #endif
+      }
 
       if (cipher == nullptr) {
         ciphersStream << std::setfill('0') << std::setw(4) << std::hex
@@ -584,7 +578,7 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   /**
    * Get the list of compression methods sent by the client in TLS Hello.
    */
-  std::string getSSLClientComprMethods() {
+  std::string getSSLClientComprMethods() const {
     if (!parseClientHello_) {
       return "";
     }
@@ -594,18 +588,52 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   /**
    * Get the list of TLS extensions sent by the client in the TLS Hello.
    */
-  std::string getSSLClientExts() {
+  std::string getSSLClientExts() const {
     if (!parseClientHello_) {
       return "";
     }
     return folly::join(":", clientHelloInfo_->clientHelloExtensions_);
   }
 
+  std::string getSSLClientSigAlgs() const {
+    if (!parseClientHello_) {
+      return "";
+    }
+
+    std::string sigAlgs;
+    sigAlgs.reserve(clientHelloInfo_->clientHelloSigAlgs_.size() * 4);
+    for (size_t i = 0; i < clientHelloInfo_->clientHelloSigAlgs_.size(); i++) {
+      if (i) {
+        sigAlgs.push_back(':');
+      }
+      sigAlgs.append(folly::to<std::string>(
+          clientHelloInfo_->clientHelloSigAlgs_[i].first));
+      sigAlgs.push_back(',');
+      sigAlgs.append(folly::to<std::string>(
+          clientHelloInfo_->clientHelloSigAlgs_[i].second));
+    }
+
+    return sigAlgs;
+  }
+
+  std::string getSSLAlertsReceived() const {
+    std::string ret;
+
+    for (const auto& alert : alertsReceived_) {
+      if (!ret.empty()) {
+        ret.append(",");
+      }
+      ret.append(folly::to<std::string>(alert.first, ": ", alert.second));
+    }
+
+    return ret;
+  }
+
   /**
    * Get the list of shared ciphers between the server and the client.
    * Works well for only SSLv2, not so good for SSLv3 or TLSv1.
    */
-  void getSSLSharedCiphers(std::string& sharedCiphers) {
+  void getSSLSharedCiphers(std::string& sharedCiphers) const {
     char ciphersBuffer[1024];
     ciphersBuffer[0] = '\0';
     SSL_get_shared_ciphers(ssl_, ciphersBuffer, sizeof(ciphersBuffer) - 1);
@@ -616,7 +644,7 @@ class AsyncSSLSocket : public virtual AsyncSocket {
    * Get the list of ciphers supported by the server in the server's
    * preference order.
    */
-  void getSSLServerCiphers(std::string& serverCiphers) {
+  void getSSLServerCiphers(std::string& serverCiphers) const {
     serverCiphers = SSL_get_cipher_list(ssl_, 0);
     int i = 1;
     const char *cipher;
@@ -629,34 +657,75 @@ class AsyncSSLSocket : public virtual AsyncSocket {
 
   static int getSSLExDataIndex();
   static AsyncSSLSocket* getFromSSL(const SSL *ssl);
-  static int eorAwareBioWrite(BIO *b, const char *in, int inl);
+  static int bioWrite(BIO* b, const char* in, int inl);
   void resetClientHelloParsing(SSL *ssl);
   static void clientHelloParsingCallback(int write_p, int version,
       int content_type, const void *buf, size_t len, SSL *ssl, void *arg);
-
-  struct ClientHelloInfo {
-    folly::IOBufQueue clientHelloBuf_;
-    uint8_t clientHelloMajorVersion_;
-    uint8_t clientHelloMinorVersion_;
-    std::vector<uint16_t> clientHelloCipherSuites_;
-    std::vector<uint8_t> clientHelloCompressionMethods_;
-    std::vector<uint16_t> clientHelloExtensions_;
-  };
+  static const char* getSSLServerNameFromSSL(SSL* ssl);
 
   // For unit-tests
-  ClientHelloInfo* getClientHelloInfo() {
+  ssl::ClientHelloInfo* getClientHelloInfo() const {
     return clientHelloInfo_.get();
+  }
+
+  /**
+   * Returns the time taken to complete a handshake.
+   */
+  virtual std::chrono::nanoseconds getHandshakeTime() const {
+    return handshakeEndTime_ - handshakeStartTime_;
   }
 
   void setMinWriteSize(size_t minWriteSize) {
     minWriteSize_ = minWriteSize;
   }
 
-  size_t getMinWriteSize() {
+  size_t getMinWriteSize() const {
     return minWriteSize_;
   }
 
   void setReadCB(ReadCallback* callback) override;
+
+  /**
+   * Tries to enable the buffer movable experimental feature in openssl.
+   * This is not guaranteed to succeed in case openssl does not have
+   * the experimental feature built in.
+   */
+  void setBufferMovableEnabled(bool enabled);
+
+  /**
+   * Returns the peer certificate, or nullptr if no peer certificate received.
+   */
+  virtual ssl::X509UniquePtr getPeerCert() const override {
+    if (!ssl_) {
+      return nullptr;
+    }
+
+    X509* cert = SSL_get_peer_certificate(ssl_);
+    return ssl::X509UniquePtr(cert);
+  }
+
+  /**
+   * Force AsyncSSLSocket object to cache local and peer socket addresses.
+   * If called with "true" before connect() this function forces full local
+   * and remote socket addresses to be cached in the socket object and available
+   * through getLocalAddress()/getPeerAddress() methods even after the socket is
+   * closed.
+   */
+  void forceCacheAddrOnFailure(bool force) { cacheAddrOnFailure_ = force; }
+
+  const std::string& getServiceIdentity() const { return serviceIdentity_; }
+
+  void setServiceIdentity(std::string serviceIdentity) {
+    serviceIdentity_ = std::move(serviceIdentity);
+  }
+
+  void setCertCacheHit(bool hit) {
+    certCacheHit_ = hit;
+  }
+
+  bool getCertCacheHit() const {
+    return certCacheHit_;
+  }
 
  private:
 
@@ -682,17 +751,22 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   void handleConnect() noexcept override;
 
   void invalidState(HandshakeCB* callback);
-  bool willBlock(int ret, int *errorOut) noexcept;
+  bool willBlock(int ret,
+                 int* sslErrorOut,
+                 unsigned long* errErrorOut) noexcept;
 
   virtual void checkForImmediateRead() noexcept override;
   // AsyncSocket calls this at the wrong time for SSL
   void handleInitialReadWrite() noexcept override {}
 
-  int interpretSSLError(int rc, int error);
-  ssize_t performRead(void** buf, size_t* buflen, size_t* offset) override;
-  ssize_t performWrite(const iovec* vec, uint32_t count, WriteFlags flags,
-                       uint32_t* countWritten, uint32_t* partialWritten)
-    override;
+  WriteResult interpretSSLError(int rc, int error);
+  ReadResult performRead(void** buf, size_t* buflen, size_t* offset) override;
+  WriteResult performWrite(
+      const iovec* vec,
+      uint32_t count,
+      WriteFlags flags,
+      uint32_t* countWritten,
+      uint32_t* partialWritten) override;
 
   ssize_t performWriteIovec(const iovec* vec, uint32_t count,
                             WriteFlags flags, uint32_t* countWritten,
@@ -714,6 +788,13 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   void applyVerificationOptions(SSL * ssl);
 
   /**
+   * Sets up SSL with a custom write bio which intercepts all writes.
+   *
+   * @return true, if succeeds and false if there is an error creating the bio.
+   */
+  bool setupSSLBio();
+
+  /**
    * A SSL_write wrapper that understand EOR
    *
    * @param ssl: SSL* object
@@ -727,12 +808,15 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   // Inherit error handling methods from AsyncSocket, plus the following.
   void failHandshake(const char* fn, const AsyncSocketException& ex);
 
+  void invokeHandshakeErr(const AsyncSocketException& ex);
   void invokeHandshakeCB();
+
+  void invokeConnectSuccess() override;
+
+  void cacheLocalPeerAddr();
 
   static void sslInfoCallback(const SSL *ssl, int type, int val);
 
-  static std::mutex mutex_;
-  static int sslExDataIndex_;
   // Whether we've applied the TCP_CORK option to the socket
   bool corked_{false};
   // SSL related members.
@@ -753,6 +837,9 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   // whether the SSL session was resumed using session ID or not
   bool sessionIDResumed_{false};
 
+  // Whether to track EOR or not.
+  bool trackEor_{false};
+
   // The app byte num that we are tracking for the MSG_EOR
   // Only one app EOR byte can be tracked.
   size_t appEorByteNo_{0};
@@ -768,6 +855,10 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   std::shared_ptr<folly::SSLContext> handshakeCtx_;
   std::string tlsextHostname_;
 #endif
+
+  // a service identity that this socket/connection is associated with
+  std::string serviceIdentity_;
+
   folly::SSLContext::SSLVerifyPeerEnum
     verifyPeer_{folly::SSLContext::SSLVerifyPeerEnum::USE_CTX};
 
@@ -775,7 +866,15 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   static int sslVerifyCallback(int preverifyOk, X509_STORE_CTX* ctx);
 
   bool parseClientHello_{false};
-  unique_ptr<ClientHelloInfo> clientHelloInfo_;
+  bool cacheAddrOnFailure_{false};
+  bool bufferMovableEnabled_{false};
+  bool certCacheHit_{false};
+  std::unique_ptr<ssl::ClientHelloInfo> clientHelloInfo_;
+  std::vector<std::pair<char, StringPiece>> alertsReceived_;
+
+  // Time taken to complete the ssl handshake.
+  std::chrono::steady_clock::time_point handshakeStartTime_;
+  std::chrono::steady_clock::time_point handshakeEndTime_;
 };
 
 } // namespace

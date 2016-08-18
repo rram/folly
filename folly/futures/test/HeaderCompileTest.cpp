@@ -1,5 +1,5 @@
 /*
- * Copyright 2015 Facebook, Inc.
+ * Copyright 2016 Facebook, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 
 // amazing what things can go wrong if you include things in an unexpected
 // order.
-#include <folly/futures/Try.h>
+#include <folly/Try.h>
 #include <folly/futures/Promise.h>
 #include <folly/futures/Future.h>
 

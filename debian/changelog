@@ -1,3 +1,9 @@
+folly (2016.08.15.00-0reddit1) trusty; urgency=medium
+
+  * New upstream release.
+
+ -- Ricky Ramirez <rram@reddit.com>  Thu, 18 Aug 2016 15:24:29 -0700
+
 folly (0.55.0-0reddit1) trusty; urgency=low
 
   * New upstream release.

@@ -4,7 +4,7 @@ This build process assumes you have cowbuilder and git-buildpackage.
 
 First you'll need to do some setup:
 ```
-DISTRIBUTION=trusty cowbuilder --create
+DIST=trusty git-pbuilder create --components "main universe"
 git clone https://github.com/reddit/folly.git
 ```
 

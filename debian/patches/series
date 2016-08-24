@@ -1,1 +1,2 @@
+drop-mallctlhelpertest.diff
 downgrade-gtest.diff
